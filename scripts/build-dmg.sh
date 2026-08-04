@@ -2,31 +2,27 @@
 set -eu
 
 ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-VERSION=${1:-v0.1.1-preview}
+VERSION=${1:-v0.1.3-preview}
 DMG_NAME="DJOneHub-macOS-arm64-${VERSION}.dmg"
-STAGE="${ROOT_DIR}/dist/dmg-stage"
+STAGE="${ROOT_DIR}/dist/dmg-stage-arm64"
 DMG="${ROOT_DIR}/dist/${DMG_NAME}"
 
-echo "==> 1/4 构建 Go 主程序与 libusb"
-"${ROOT_DIR}/scripts/package-macos-arm64.sh" "${VERSION}"
+echo "=========================================="
+echo "  构建标准 macOS DMG 安装包 (arm64, ${VERSION})"
+echo "=========================================="
 
-echo "==> 2/4 构建通知助手（含自检）"
-(cd "${ROOT_DIR}/macos/DJOneHubNotifier" && ./build-app.sh)
-
-echo "==> 3/4 组装安装目录"
+echo "==> 1/3 构建 App Bundle"
 rm -rf "${STAGE}"
 mkdir -p "${STAGE}"
-ditto --norsrc --noextattr --noqtn --noacl "${ROOT_DIR}/dist/release/DJOneHub-macOS-arm64-${VERSION}" "${STAGE}/djonehub"
-ditto --norsrc --noextattr --noqtn --noacl "${ROOT_DIR}/macos/DJOneHubNotifier/dist/DJOneHubNotifier.app" "${STAGE}/DJOneHubNotifier.app"
-cp "${ROOT_DIR}/scripts/dmg/安装 DJOneHub.command" "${STAGE}/安装 DJOneHub.command"
-cp "${ROOT_DIR}/scripts/dmg/卸载 DJOneHub.command" "${STAGE}/卸载 DJOneHub.command"
-cp "${ROOT_DIR}/scripts/dmg/使用说明.txt" "${STAGE}/使用说明.txt"
-chmod 755 "${STAGE}/安装 DJOneHub.command" "${STAGE}/卸载 DJOneHub.command"
+"${ROOT_DIR}/scripts/create-app-bundle.sh" "${VERSION}" arm64 "${STAGE}/DJOneHub.app"
 
-echo "==> 4/4 生成 DMG"
+echo "==> 2/3 创建 Applications 快捷方式"
+ln -s /Applications "${STAGE}/Applications"
+
+echo "==> 3/3 生成 DMG 安装盘"
 rm -f "${DMG}"
 hdiutil create -volname "DJOneHub" -srcfolder "${STAGE}" -ov -format UDZO "${DMG}"
 hdiutil verify "${DMG}"
 
 echo
-echo "完成：${DMG}"
+echo "✅ DMG 创建完成: ${DMG}"

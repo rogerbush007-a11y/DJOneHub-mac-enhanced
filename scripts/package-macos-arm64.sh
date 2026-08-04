@@ -93,6 +93,7 @@ GOCACHE="${BUILD_ROOT}/go-cache"
 rm -rf "${GOCACHE}"
 mkdir -p "${GOCACHE}"
 export GOCACHE
+SDKROOT="$(xcrun --show-sdk-path)" CC="$(xcrun -f clang)" \
 PKG_CONFIG_PATH="${LIBUSB_SOURCE}" \
 MACOSX_DEPLOYMENT_TARGET=13.0 CGO_ENABLED=1 GOOS=darwin GOARCH=arm64 go build \
   -p 2 \

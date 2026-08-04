@@ -19,20 +19,17 @@ interface for management.
 
 ## Downloaded release
 
-The Apple Silicon ZIP contains the executable, its libusb runtime, licenses and
-the `djonehub` terminal launcher. It does not require Go, Homebrew or a separately
-installed libusb on the user's Mac.
+DJOneHub is distributed as a standard macOS Disk Image (`.dmg`).
 
-From the extracted release directory:
+1. Open `DJOneHub-macOS-universal-v0.1.3-preview.dmg`.
+2. Drag `DJOneHub.app` into `/Applications`.
+3. Open `DJOneHub` from Applications or Launchpad.
 
-```sh
-./djonehub start
-```
+The launcher app will run in the menu bar:
+- **Left click**: Opens `http://127.0.0.1:7575` in your browser.
+- **Right click**: Context menu to open web interface, toggle auto-launch at login, or quit application.
 
-The terminal remains attached to the service and the management page opens
-automatically. Press `Control+C` to stop it, or run `./djonehub stop` from another
-terminal in the same directory. Logs are stored in
-`~/Library/Logs/DJOneHub/djonehub.log`.
+Logs are stored in `~/Library/Application Support/DJOneHub/logs/`.
 
 ## Build from source
 
@@ -40,59 +37,24 @@ Requirements:
 
 - macOS 13 or newer
 - Go 1.26 or newer
+- Xcode / Command Line Tools
+
+Build DMG release (Universal binary arm64 + x86_64):
 
 ```sh
-./scripts/package-macos-arm64.sh v0.1.0-preview
+./scripts/build-dmg-universal.sh v0.1.3-preview
 ```
 
 Release outputs:
 
-- `dist/release/DJOneHub-macOS-arm64-v0.1.0-preview/`
-- `dist/release/DJOneHub-macOS-arm64-v0.1.0-preview.zip`
-- `dist/release/DJOneHub-macOS-arm64-v0.1.0-preview.zip.sha256`
+- `dist/DJOneHub.app`
+- `dist/DJOneHub-macOS-universal-v0.1.3-preview.dmg`
 
-The packaging script downloads the official libusb source archive, verifies its
-SHA-256, builds it for macOS 13 or newer and bundles the resulting runtime.
-
-## Run
-
-Connect the modem and run:
+Build App Bundle directly:
 
 ```sh
-./dist/djonehub-macos
+./scripts/create-app-bundle.sh v0.1.3-preview universal
 ```
-
-If automatic discovery picks no AT port, inspect `/dev/cu.*` and pass it:
-
-```sh
-./dist/djonehub-macos -port /dev/cu.usbmodemXXXX
-```
-
-The server only listens on localhost by default. Open:
-
-```text
-http://127.0.0.1:7575
-```
-
-## Demo without hardware
-
-To explore the management page before buying the module, run:
-
-```sh
-./dist/djonehub-macos -demo
-```
-
-Then open `http://127.0.0.1:7575`. Demo mode provides simulated modem status,
-SMS messages, AT command responses and eSIM profiles. It does not access a real
-SIM, send messages or switch a physical eSIM profile.
-
-## Launch at login
-
-```sh
-./scripts/install-macos.sh
-```
-
-Logs are written to `~/Library/Logs/DJOneHub`.
 
 ## Platform limitations
 

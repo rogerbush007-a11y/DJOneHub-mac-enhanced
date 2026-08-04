@@ -3,12 +3,8 @@
 这是在 [DJOneHub](https://github.com/ZenGeekLabs/DJOneHub) 基础上做的 macOS 改造版。原项目解决了大疆第一代 4G 模块在 Mac 上的短信、eSIM 与 USB 4G 上网；这一版把重点放在“模块长期插在 Mac 上时，能不能像一张真正的电话卡一样被看见”。
 
 > [!IMPORTANT]
-> 📦 **一键安装包已上传**：[Releases](https://github.com/rogerbush007-a11y/DJOneHub-mac-enhanced/releases) 提供三个 macOS 版本与 Windows 实验版，macOS 版双击“安装 DJOneHub.command”一键安装，无需终端命令：
-> - `DJOneHub-macOS-arm64-v0.1.5-preview.dmg`：新增 4G 网卡 DHCP 自动续租（模块重连后自动恢复 4G 自动联网）
-> - `DJOneHub-macOS-universal-v0.1.3-preview.dmg`：支持 Apple Silicon 与 Intel Mac（⚠️ 未在真实 Intel 机型实测，谨慎下载）
-> - `DJOneHub-macOS-arm64-v0.1.2-preview.dmg`：菜单栏不含网速显示
-> - `DJOneHub-macOS-arm64-v0.1.1-preview.dmg`：保留菜单栏实时网速显示
-> - `DJOneHub-Windows-amd64-v0.1.4-preview.exe`：Windows 实验版（⚠️ 未在真实 Windows + 模块环境实测，USB AT/eSIM 不可用，谨慎下载）
+> 📦 **标准应用安装包已上传**：[Releases](https://github.com/MiQieR/DJOneHub-mac-enhanced/releases) 提供标准 macOS DMG 安装包，双击打开后拖拽 `DJOneHub.app` 到 `Applications` 目录即可完成安装：
+> - `DJOneHub-macOS-universal-v0.1.5-preview.dmg`：基于上游 v0.1.5，支持 Apple Silicon 与 Intel Mac 通用双架构，新增 4G 网卡 DHCP 自动续租（模块重连后自动恢复 4G 自动联网）
 >
 > 更新内容见 [CHANGELOG.md](CHANGELOG.md)。
 
@@ -133,81 +129,33 @@
 
 ## 下载
 
-除 ZIP 外，还提供一键安装的 DMG 安装包：下载后双击“安装 DJOneHub.command”即可完成安装，无需终端命令。版本按喜好选择：
+请前往项目的 **Releases** 页面下载安装包：
 
-- `DJOneHub-macOS-universal-v0.1.3-preview.dmg`：Apple Silicon 与 Intel Mac 通用（⚠️ **风险提示**：Intel 版未在真实机型上实际测试，可能有兼容性问题，谨慎下载）。
-- `DJOneHub-macOS-arm64-v0.1.5-preview.dmg`：Apple Silicon，新增 4G 网卡 DHCP 自动续租（模块 USB 重连后自动恢复 4G 自动联网）。
-- `DJOneHub-macOS-arm64-v0.1.2-preview.dmg`：Apple Silicon，菜单栏不显示网速（只保留 GPS 与 4G 信号图标）。
-- `DJOneHub-macOS-arm64-v0.1.1-preview.dmg`：Apple Silicon，保留菜单栏实时网速显示。
-- `DJOneHub-Windows-amd64-v0.1.4-preview.exe`：Windows 实验版（amd64 单文件，⚠️ **风险提示**：仅交叉编译验证，未在真实 Windows + 4G 模块环境实测；USB 直连 AT/eSIM 依赖 macOS 不可用，需通过串口连接模块，谨慎下载）。
+- `DJOneHub-macOS-universal-v0.1.5-preview.dmg`：基于上游 v0.1.5，支持 Apple Silicon（M 系列）与 Intel Mac 的标准 macOS 应用安装盘，新增 4G 网卡 DHCP 自动续租。
 
-
-请前往项目的 **Releases** 页面，下载文件名中包含 `macOS-arm64` 的 ZIP 发行包。
-
-Release 页面还会提供同名的 `.sha256` 文件。它不是程序的一部分，也不是安装必需文件，仅用于确认 ZIP 是否下载完整、是否与发布者生成的文件一致。
-
-GitHub 自动生成的 `Source code (zip)` 和 `Source code (tar.gz)` 是源码快照，适合开发者阅读和构建，不能替代已经打包好的 macOS 发行包。
-
-验证 ZIP 时，在下载目录执行：
-
-```sh
-shasum -a 256 DJOneHub-*.zip
-```
-
-将输出与 `.sha256` 文件中的值比较即可。
+Release 页面还会提供同名的 `.sha256` 文件。它不是程序的一部分，也不是安装必需文件，仅用于确认 DMG 是否下载完整、是否与发布者生成的文件一致。
 
 ## 安装
 
-1. 完整解压下载的 ZIP，不要只从压缩包中拖出单个文件。
-2. 打开 macOS“终端”。
-3. 输入 `cd `，在 `cd` 后保留一个空格。
-4. 把解压得到的 DJOneHub 文件夹拖入终端窗口，然后按回车。
-5. 执行安装命令：
+1. 双击打开下载的 `DJOneHub-macOS-universal-v0.1.3-preview.dmg`。
+2. 将 `DJOneHub.app` 图标拖入 **Applications** 文件夹快捷方式。
+3. 打开 macOS 的“访达” -> “应用程序”，双击 **DJOneHub** 图标即可启动。
 
-```sh
-./install
-```
+## 启动与菜单栏控制
 
-![在发行包目录执行安装命令](docs/images/install.png)
+1. 启动应用后，系统顶部状态栏会出现 **DJOneHub 状态栏图标**。
+2. **左键点击**状态栏图标：自动打开浏览器访问控制面板 `http://127.0.0.1:7575`。
+3. **右键点击**状态栏图标：弹出控制菜单：
+   - **打开 DJOneHub**：打开浏览器管理网页。
+   - **开机自动启动**：勾选/取消勾选可轻松开启或关闭开机自启动。
+   - **退出 DJOneHub**：优雅退出应用并自动关闭后台服务及通知助手。
 
-安装过程中，macOS 可能要求输入当前用户的管理员密码。输入密码时终端不会显示圆点或星号，这是正常现象。
+## 卸载说明
 
-程序主体会安装到：
-
-```text
-/usr/local/libexec/djonehub
-```
-
-终端命令入口会创建在：
-
-```text
-/usr/local/bin/djonehub
-```
-
-安装完成后，无论终端当前位于哪个目录，都可以直接使用 `djonehub` 命令。
-
-## 首次启动
-
-1. 先将 SIM 或 eUICC 卡片插入模块。
-2. 使用支持数据传输的 USB-C 线连接模块与 Mac。
-3. 等待 macOS 完成 USB 设备枚举。
-4. 在终端中启动 DJOneHub：
-
-```sh
-djonehub start
-```
-
-程序会自动打开本机管理页面：
-
-```text
-http://127.0.0.1:7575
-```
-
-启动程序的终端需要保持运行。按 `Control+C` 可以停止程序。如果浏览器没有自动打开，可以执行：
-
-```sh
-djonehub open
-```
+要完全卸载 DJOneHub：
+1. 右键状态栏图标，选择“退出 DJOneHub”。
+2. 将 `/Applications/DJOneHub.app` 拖入废纸篓。
+3.（可选）如需清除所有本地配置与日志，删除数据目录：`~/Library/Application Support/DJOneHub/`。
 
 ## macOS 阻止打开时
 
