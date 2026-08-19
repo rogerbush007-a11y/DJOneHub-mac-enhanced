@@ -4,6 +4,7 @@
 # Build outputs
 /dist/
 /bin/
+/build/
 **/.build/
 **/dist/
 backups/
