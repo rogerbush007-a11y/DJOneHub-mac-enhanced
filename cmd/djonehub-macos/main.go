@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/subtle"
 	"embed"
 	"encoding/base64"
 	"encoding/hex"
@@ -205,15 +206,20 @@ func main() {
 	var port string
 	var listen string
 	var demo bool
+	var token string
 	flag.StringVar(&port, "port", "", "AT serial port; auto-detected when omitted")
 	flag.StringVar(&listen, "listen", "127.0.0.1:7575", "HTTP listen address")
+	flag.StringVar(&token, "token", "", "shared secret required as 'Authorization: Bearer <token>' on /api routes; empty disables auth (backward compatible)")
 	flag.BoolVar(&demo, "demo", false, "run the web UI with simulated modem data")
 	flag.Parse()
+	if token == "" {
+		token = os.Getenv("DJONEHUB_API_TOKEN")
+	}
 
 	if demo {
 		instance := newDemoApp()
 		log.Printf("DJOneHub demo mode")
-		serve(instance, listen)
+		serve(instance, listen, token)
 		return
 	}
 
@@ -249,7 +255,7 @@ func main() {
 			log.Printf("modem discovery skipped: %v", err)
 			go instance.startSMSPoller(context.Background())
 			go instance.startCallPoller(context.Background())
-			serve(instance, listen)
+			serve(instance, listen, token)
 			return
 		}
 	}
@@ -303,7 +309,7 @@ func main() {
 	go manager.CheckAllSMS()
 	go instance.startCallPoller(context.Background())
 
-	serve(instance, listen)
+	serve(instance, listen, token)
 }
 
 func (a *app) initUSBATESIMManager() {
@@ -346,10 +352,10 @@ func (a *app) installESIMManager(manager *esim.Manager, switchAllowed bool) bool
 	return true
 }
 
-func serve(instance *app, listen string) {
+func serve(instance *app, listen string, token string) {
 	server := &http.Server{
 		Addr:              listen,
-		Handler:           instance.routes(),
+		Handler:           instance.routes(token),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -730,7 +736,7 @@ func (a *app) markUSBATDetached(reason string) {
 	}
 }
 
-func (a *app) routes() http.Handler {
+func (a *app) routes(token string) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/health", a.health)
 	mux.HandleFunc("GET /api/status", a.status)
@@ -763,7 +769,7 @@ func (a *app) routes() http.Handler {
 	mux.HandleFunc("POST /api/esim/download", a.downloadESIMProfile)
 	content, _ := fs.Sub(webAssets, "web")
 	mux.Handle("/", http.FileServer(http.FS(content)))
-	return securityHeaders(mux)
+	return securityHeaders(requireToken(token, mux))
 }
 
 func securityHeaders(next http.Handler) http.Handler {
@@ -772,6 +778,42 @@ func securityHeaders(next http.Handler) http.Handler {
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Referrer-Policy", "no-referrer")
 		next.ServeHTTP(w, r)
+	})
+}
+
+// requireToken guards /api/* routes with a shared secret when a token is
+// configured. With an empty token it is a no-op, preserving the previous
+// open-by-default behaviour (safe for 127.0.0.1). The embedded web UI served
+// at "/" is intentionally left open so it keeps loading on localhost. Token
+// comparison is constant-time to avoid timing side channels.
+func requireToken(token string, next http.Handler) http.Handler {
+	if token == "" {
+		return next
+	}
+	const prefix = "Bearer "
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasPrefix(r.URL.Path, "/api/") {
+			next.ServeHTTP(w, r)
+			return
+		}
+		auth := r.Header.Get("Authorization")
+		if len(auth) <= len(prefix) || !strings.EqualFold(auth[:len(prefix)], prefix) {
+			writeUnauthorized(w)
+			return
+		}
+		if subtle.ConstantTimeCompare([]byte(auth[len(prefix):]), []byte(token)) != 1 {
+			writeUnauthorized(w)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func writeUnauthorized(w http.ResponseWriter) {
+	w.Header().Set("WWW-Authenticate", "Bearer")
+	writeJSON(w, http.StatusUnauthorized, map[string]any{
+		"error":   "unauthorized",
+		"message": "missing or invalid Authorization: Bearer <token>",
 	})
 }
 
