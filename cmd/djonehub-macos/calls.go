@@ -93,10 +93,14 @@ func (a *app) startCallPoller(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-timer.C:
+			nextInterval := interval
+			if a.currentUSBDevice() == nil {
+				nextInterval = 6 * time.Second
+			}
 			if err := a.pollCallOnce(); err != nil {
 				log.Printf("call poll failed: %v", err)
 			}
-			timer.Reset(interval)
+			timer.Reset(nextInterval)
 		}
 	}
 }

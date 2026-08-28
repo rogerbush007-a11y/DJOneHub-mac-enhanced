@@ -260,7 +260,7 @@ struct DJOneHubAPI: Sendable {
     private func get<T: Decodable>(path: String) async throws -> T {
         var request = URLRequest(url: baseURL.appending(path: path))
         request.cachePolicy = .reloadIgnoringLocalCacheData
-        request.timeoutInterval = 5
+        request.timeoutInterval = 10
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let http = response as? HTTPURLResponse else {
             throw APIError.invalidResponse

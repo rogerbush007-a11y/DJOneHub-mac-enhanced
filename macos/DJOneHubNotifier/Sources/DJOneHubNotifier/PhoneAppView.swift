@@ -413,6 +413,25 @@ struct RecentsView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            HStack {
+                Text(L10n.t("最近通话"))
+                    .font(.title3.weight(.semibold))
+                Spacer()
+                Button {
+                    refreshRecordings()
+                    Task { await calls.refreshCalls() }
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.body.weight(.semibold))
+                }
+                .buttonStyle(.plain)
+                .help(L10n.t("刷新通话记录与录音"))
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+
+            Divider()
+
             if calls.history.isEmpty {
                 Spacer()
                 VStack(spacing: 8) {
@@ -689,6 +708,7 @@ private enum ThreadItem: Identifiable {
 
 private struct MessagesView: View {
     @EnvironmentObject private var calls: CallCenter
+    @EnvironmentObject private var settings: AppSettings
     @Binding var pendingRecipient: String?
     @State private var received: [SMSMessage] = []
     @State private var sent: [SentSMS] = []
@@ -756,6 +776,19 @@ private struct MessagesView: View {
                         .foregroundStyle(.red)
                         .lineLimit(1)
                 }
+                Button {
+                    Task { await load() }
+                } label: {
+                    if loading {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Image(systemName: "arrow.clockwise")
+                            .font(.body.weight(.semibold))
+                    }
+                }
+                .buttonStyle(.plain)
+                .disabled(loading)
+                .help(L10n.t("刷新短信列表"))
                 Button {
                     composerRecipient = ""
                     showingComposer = true
@@ -836,9 +869,10 @@ private struct MessagesView: View {
         .task {
             if let identity = try? await calls.apiClient.simIdentity() { ownNumber = identity.phoneNumber }
             if let status = try? await calls.apiClient.smsStatus() { autoCleanupME = status.autoCleanupME }
+            await load()
             while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 6_000_000_000)
                 await load()
-                try? await Task.sleep(nanoseconds: 5_000_000_000)
             }
         }
         .overlay {
@@ -1935,7 +1969,7 @@ private struct SettingsView: View {
                             .buttonStyle(.bordered)
                             .tint(.red)
                             .controlSize(.regular)
-                            Text(L10n.t("停止 4G 后台、短信守护与通知服务"))
+                            Text(L10n.t("停止 4G 后台与 DJOneHub 应用"))
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                             Spacer()
@@ -1952,29 +1986,11 @@ private struct SettingsView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .alert(L10n.t("确认完全退出？"), isPresented: $showQuitConfirm) {
             Button(L10n.t("退出"), role: .destructive) {
-                quitAllServices()
+                NSApp.terminate(nil)
             }
             Button(L10n.t("取消"), role: .cancel) {}
         } message: {
-            Text(L10n.t("将停止 DJOneHub 后台服务、WiFi/短信守护与本通知程序；需要时请重新运行本应用恢复。"))
-        }
-    }
-
-    private func quitAllServices() {
-        let uid = getuid()
-        let labels = [
-            "com.jamie.djonehub",
-            "com.jamie.djonehub-wifi-sms-guard",
-            "com.jamie.djonehub-notifier",
-        ]
-        for label in labels {
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
-            process.arguments = ["bootout", "gui/\(uid)/\(label)"]
-            try? process.run()
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
-            NSApp.terminate(nil)
+            Text(L10n.t("将停止 DJOneHub 后台进程与本应用程序。"))
         }
     }
 }

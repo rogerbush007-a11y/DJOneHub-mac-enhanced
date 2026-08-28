@@ -31,7 +31,10 @@ let package = Package(
             name: "DJOneHubNotifier",
             dependencies: ["CModemBridge", "CUACProbe"],
             path: "Sources/DJOneHubNotifier",
-            swiftSettings: [.swiftLanguageMode(.v5)]
+            swiftSettings: [.swiftLanguageMode(.v5)],
+            linkerSettings: [
+                .linkedFramework("ServiceManagement"),
+            ]
         ),
     ]
 )

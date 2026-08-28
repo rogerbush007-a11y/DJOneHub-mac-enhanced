@@ -1,6 +1,32 @@
 # 更新记录
 
-## 2026-08-14 · v1.2.9（发布包与配置识别修复）
+## 2026-08-17 · v1.2.9（本 fork 合并上游 v1.2.9）
+
+**方案 A 架构升级**：废弃独立的 DJOneHubLauncher Swift 启动器，DJOneHubNotifier 升级为主 App（重命名为 DJOneHub），直接管理 Go 后端进程。
+
+### 新增功能
+- **通话**：拨号、接听、拒接、挂断、DTMF、通话记录与录音入口
+- **短信增强**：验证码预览、读取后自动清理模块存储
+- **通讯录**：同步本机联系人，支持按姓名/号码拨号或发短信
+- **iPhone / iPad 模式**：关闭 USB Audio 保留上网与短信，接回 Mac 后自动恢复
+- **来电/短信通知**：不需要 Web 面板常驻，原生状态栏通知
+- **动态状态栏图标**：GPS 信号格与 4G 信号格实时更新
+- **开机自启**：在「设置」页面通过 SMAppService 原生开关控制（无强制 LaunchAgent）
+
+### 架构改进（本 fork）
+- 将 `macos/DJOneHubNotifier` 升级为主 App，删除 `macos/DJOneHubLauncher`
+- 主程序可执行文件重命名：`DJOneHubNotifier` → `DJOneHub`
+- 新增 `ProcessManager.swift`：在 App 内直接管理 Go 后端进程（无 LaunchAgent）
+- 新增 `AutoLaunch.swift`：`SMAppService.mainApp` 开机自启，集成到设置界面
+- **删除** `ensureModuleServices()`、`restartModuleServices()`、`serviceIsLoaded()` 三个通过 `launchctl` 操作 LaunchAgent 的函数（这是旧版本待机耗电的根本原因）
+- 图标替换为上游 DJOneHubNotifier 的新图标（`AppIcon.icns`）
+- App Bundle 结构简化：不再含子 App `DJOneHubNotifier.app`
+
+### 防倒退（维护标准）
+- 安装方式保持 DMG 拖拽安装，无 `.command` 脚本，无 LaunchAgent 强制自启
+- Release 链接指向本 fork：`https://github.com/MiQieR/DJOneHub-mac-enhanced-dmg/releases`
+
+
 
 - 修复模块 USB 重新枚举后仍缓存旧“已就绪”结果的问题；重新连接后会重新读取实际配置。
 - 旧 UAC `2C7C:0125 + 1,1,1,1,1,0,1` 视为已具备 USB Audio 的兼容配置。初始化仅补齐 IMS / VoLTE，不再强写其 ADB 位；部分模块对该写入返回 `OK` 但保持原值时，不会再误报“配置回读未确认”。

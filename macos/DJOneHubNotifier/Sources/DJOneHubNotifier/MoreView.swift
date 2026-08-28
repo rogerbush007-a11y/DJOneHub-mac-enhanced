@@ -5,6 +5,7 @@ import AppKit
 
 struct MoreView: View {
     @EnvironmentObject private var calls: CallCenter
+    @EnvironmentObject private var settings: AppSettings
 
     @State private var modem: ModemStatus?
     @State private var traffic: NetworkTrafficSnapshot?
@@ -144,6 +145,12 @@ struct MoreView: View {
                         .padding(.vertical, 10)
                     }
                 }
+            }
+            .modifier(PhoneCard())
+
+            MoreSectionTitle("系统")
+            VStack(spacing: 0) {
+                AutoLaunchToggleRow()
             }
             .modifier(PhoneCard())
 
@@ -444,7 +451,6 @@ struct MoreView: View {
             await refreshAll()
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 5_000_000_000)
-                // 轻量状态（4G 策略开关）自动刷新，与网页端/后台变更保持同步
                 if let p = try? await calls.apiClient.cellularPolicy() {
                     policy = p
                 }
@@ -815,6 +821,7 @@ private enum OperatorName {
 /// 每 2 秒采样一次流量计数，用相邻两次采样计算实时速率（与网页端一致）。
 struct DeviceStatusCard: View {
     @EnvironmentObject private var calls: CallCenter
+    @EnvironmentObject private var settings: AppSettings
 
     @State private var status: ModemStatus?
     @State private var traffic: NetworkTrafficSnapshot?
@@ -869,7 +876,7 @@ struct DeviceStatusCard: View {
                     await sampleOnce()
                 }
                 .frame(maxWidth: 100)
-                Text(L10n.t("每 2 秒自动更新"))
+                Text(L10n.t("每 3 秒自动更新"))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
@@ -882,14 +889,26 @@ struct DeviceStatusCard: View {
         .task {
             while !Task.isCancelled {
                 await sampleOnce()
-                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
             }
         }
     }
 
     private func sampleOnce() async {
         if let modem = try? await calls.apiClient.modemStatus() {
-            status = modem
+            if modem.operatorName != nil || status == nil {
+                status = modem
+            } else if let prev = status {
+                status = ModemStatus(
+                    signalDBM: modem.signalDBM ?? prev.signalDBM,
+                    networkMode: modem.networkMode ?? prev.networkMode,
+                    operatorName: modem.operatorName ?? prev.operatorName,
+                    simInserted: modem.simInserted ?? prev.simInserted,
+                    regStatusText: modem.regStatusText ?? prev.regStatusText,
+                    imei: modem.imei ?? prev.imei,
+                    iccid: modem.iccid ?? prev.iccid
+                )
+            }
         }
         guard let current = try? await calls.apiClient.networkTraffic(), current.available else {
             previous = nil
@@ -1124,11 +1143,8 @@ struct GPSPanel: View {
             }
         }
         .task {
-            while !Task.isCancelled {
-                if let current = try? await calls.apiClient.gpsStatus() {
-                    gps = current
-                }
-                try? await Task.sleep(nanoseconds: 5_000_000_000)
+            if let current = try? await calls.apiClient.gpsStatus() {
+                gps = current
             }
         }
     }

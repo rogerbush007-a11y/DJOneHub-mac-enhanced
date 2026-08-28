@@ -124,8 +124,6 @@ build_go amd64
 lipo -create "${BUILD_ROOT}/djonehub-arm64" "${BUILD_ROOT}/djonehub-amd64" \
   -output "${STAGE_DIR}/bin/djonehub-macos"
 
-cp "${ROOT_DIR}/packaging/djonehub" "${STAGE_DIR}/djonehub"
-cp "${ROOT_DIR}/packaging/install" "${STAGE_DIR}/install"
 cp "${ROOT_DIR}/packaging/README.md" "${STAGE_DIR}/README.md"
 cp "${ROOT_DIR}/LICENSE" "${STAGE_DIR}/LICENSE"
 cp "${LIBUSB_SOURCE}/COPYING" "${STAGE_DIR}/licenses/libusb-COPYING"
@@ -137,7 +135,7 @@ if find "${STAGE_DIR}" -type f \( -name '*.ko' -o -name '*.armv7' \) | grep -q .
   exit 1
 fi
 
-chmod 755 "${STAGE_DIR}/djonehub" "${STAGE_DIR}/install" "${STAGE_DIR}/bin/djonehub-macos" "${STAGE_DIR}/lib/libusb-1.0.0.dylib"
+chmod 755 "${STAGE_DIR}/bin/djonehub-macos" "${STAGE_DIR}/lib/libusb-1.0.0.dylib"
 codesign --force --sign - "${STAGE_DIR}/lib/libusb-1.0.0.dylib"
 codesign --force --sign - "${STAGE_DIR}/bin/djonehub-macos"
 

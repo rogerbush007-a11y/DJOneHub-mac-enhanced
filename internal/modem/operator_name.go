@@ -44,6 +44,15 @@ var servingOperatorNameByPLMN = map[string]string{
 	"46693": "台湾大哥大",
 	"46697": "台湾大哥大",
 	"46699": "台湾大哥大",
+
+	// 中国澳门
+	"45500": "CTM (澳门电讯)",
+	"45501": "CTM (澳门电讯)",
+	"45502": "中国电信 (澳门)",
+	"45503": "3 (澳门)",
+	"45504": "CTM (澳门电讯)",
+	"45505": "3 (澳门)",
+	"45506": "数码通 (澳门)",
 }
 
 func normalizeOperatorCode(code string) string {

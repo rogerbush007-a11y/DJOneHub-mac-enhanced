@@ -53,6 +53,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var mainWindow: NSWindow?
     private let healthCheck: Bool
     private let reviewSafe: Bool
+    // Go 后端进程管理器（方案 A：DJOneHubNotifier 作为主 App，负责管理后端生命周期）
+    private let processManager = ProcessManager()
 
     private var callTimer: Timer?
     private var smsTimer: Timer?
@@ -98,62 +100,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         super.init()
     }
 
-    /// 完全退出会 bootout 后端与守护服务；重新打开应用时把缺失的
-    /// LaunchAgent（~/Library/LaunchAgents/<label>.plist）重新引导回来。
-    /// notifier 自身不在此注册，避免手动打开时出现双实例。
-    private func ensureModuleServices() async {
-        let uid = getuid()
-        let agentsDir = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/LaunchAgents", isDirectory: true)
-        for label in ["com.jamie.djonehub", "com.jamie.djonehub-wifi-sms-guard"] {
-            let plist = agentsDir.appendingPathComponent("\(label).plist")
-            guard FileManager.default.fileExists(atPath: plist.path) else { continue }
-            if Self.serviceIsLoaded(label, uid: uid) { continue }
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
-            process.arguments = ["bootstrap", "gui/\(uid)", plist.path]
-            do {
-                try process.run()
-                process.waitUntilExit()
-            } catch {
-                // 忽略：轮询到离线时仍会再次尝试
-            }
-        }
-    }
-
-    /// launchctl kickstart -k 强制重启已加载的后台服务，用于休眠唤醒后
-    /// 重新初始化 4G 模块、DHCP 与路由策略，或救活挂死的后端进程。
-    private func restartModuleServices() async {
-        let uid = getuid()
-        for label in ["com.jamie.djonehub", "com.jamie.djonehub-wifi-sms-guard"] {
-            guard Self.serviceIsLoaded(label, uid: uid) else { continue }
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
-            process.arguments = ["kickstart", "-k", "gui/\(uid)/\(label)"]
-            do {
-                try process.run()
-                process.waitUntilExit()
-            } catch {
-                // 忽略：服务不可用时，轮询到离线会再尝试拉起
-            }
-        }
-    }
-
-    private static func serviceIsLoaded(_ label: String, uid: uid_t) -> Bool {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
-        process.arguments = ["print", "gui/\(uid)/\(label)"]
-        process.standardOutput = Pipe()
-        process.standardError = Pipe()
-        do {
-            try process.run()
-            process.waitUntilExit()
-            return process.terminationStatus == 0
-        } catch {
-            return false
-        }
-    }
-
     func applicationDidFinishLaunching(_ notification: Notification) {
         installMainMenu()
         if healthCheck {
@@ -173,16 +119,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         let demoCall = CommandLine.arguments.contains("--show-call")
         if !demoCall {
-            callTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
-                Task { @MainActor in await self?.pollCalls() }
-            }
-            smsTimer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
+            // 启动 Go 后端（方案 A：由本 App 直接管理后端进程，不依赖 LaunchAgent）
+            processManager.startAll()
+            smsTimer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
                 Task { @MainActor in await self?.pollMessages() }
             }
-            gpsTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
+            gpsTimer = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { [weak self] _ in
                 Task { @MainActor in await self?.pollGPSStatus() }
             }
-            cellularTimer = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { [weak self] _ in
+            cellularTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
                 Task { @MainActor in await self?.pollCellularStatus() }
             }
             NSWorkspace.shared.notificationCenter.addObserver(
@@ -192,10 +137,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 object: nil
             )
             Task {
-                // 重新打开应用时，恢复被「完全退出」停止的后台服务（后端 + WiFi/短信守护）
-                await ensureModuleServices()
-                try? await Task.sleep(nanoseconds: 1_000_000_000)
-                await pollCalls()
+                // 等待 Go 后端启动就绪后（延时 2 秒），发起初始探测刷新
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
                 await pollMessages()
                 await pollGPSStatus()
                 await pollCellularStatus()
@@ -256,6 +199,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         cancelGPSSearchTimeout()
         removeGPSStatusItem()
         removeCellularStatusItem()
+        // 优雅停止 Go 后端（SIGTERM → 等待 3s → SIGKILL）
+        processManager.stopAll()
     }
 
     private func pollCalls() async {
@@ -313,27 +258,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             seenCallHistoryIDs.formUnion(history.map(\.id))
         } catch {
             consecutiveErrors += 1
-            if consecutiveErrors == 5 {
-                await ensureModuleServices()
-                await restartModuleServices()
-                panel.show(
-                    .error(message: error.localizedDescription),
-                    onReject: {},
-                    onAnswer: {},
-                    onOpen: openDJOneHub
-                )
-            }
         }
     }
 
-    /// 系统从休眠唤醒后，强制重启后台服务并立刻恢复轮询与菜单栏状态，
+    /// 系统从休眠唤醒后，等待 USB 设备重新枚举稳定，然后恢复轮询与菜单栏状态，
     /// 避免 4G 模块/网络在唤醒后无法自动找回。
     @objc private func systemDidWake(_ notification: Notification) {
         Task { @MainActor in
-            // 等 USB 设备重新枚举、网络栈稳定后再重启服务
+            // 等 USB 设备重新枚举、网络栈稳定后再恢复轮询
             try? await Task.sleep(nanoseconds: 4_000_000_000)
             consecutiveErrors = 0
-            await restartModuleServices()
             try? await Task.sleep(nanoseconds: 1_000_000_000)
             await pollCalls()
             await pollMessages()
@@ -453,7 +387,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         gpsStartupFramesRemaining = 8
         gpsAnimationFrame = 0
         renderGPSAnimationFrame()
-        gpsAnimationTimer = Timer.scheduledTimer(withTimeInterval: 0.32, repeats: true) { [weak self] _ in
+        gpsAnimationTimer = Timer.scheduledTimer(withTimeInterval: 0.8, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 self?.renderGPSAnimationFrame()
             }

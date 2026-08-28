@@ -10,10 +10,16 @@ CHECKSUM="${DMG}.sha256"
 NOTIFIER_SRC="${ROOT_DIR}/macos/DJOneHubNotifier"
 BUILD_ROOT="${TMPDIR:-/tmp}/djonehub-macos-package-universal"
 
-echo "==> 1/4 构建通用主程序（arm64 + x86_64）"
+echo "=========================================="
+echo "  构建标准 macOS DMG 安装包 (${VERSION})"
+echo "=========================================="
+
+echo "==> 1/3 构建 App Bundle（Go 后端 + Swift 主程序）"
+
+# 编译通用 Go 后端
 "${ROOT_DIR}/scripts/package-macos-universal.sh" "${VERSION}"
 
-echo "==> 2/4 构建通用通知助手"
+# 编译 DJOneHubNotifier Universal（方案 A：DJOneHubNotifier 即为主程序）
 mkdir -p "${BUILD_ROOT}/local-cache/clang" "${BUILD_ROOT}/local-cache/swiftpm"
 export CLANG_MODULE_CACHE_PATH="${BUILD_ROOT}/local-cache/clang"
 export SWIFTPM_MODULECACHE_OVERRIDE="${BUILD_ROOT}/local-cache/clang"
@@ -27,9 +33,8 @@ cd "${NOTIFIER_SRC}"
 swift build --disable-sandbox -c release
 "${NOTIFIER_SRC}/.build/release/DJOneHubNotifier" --self-test
 
-# SwiftPM on an Apple-Silicon host normally emits only the native slice. Build
-# the Intel slice explicitly, including the two local C targets used by the
-# notifier. This avoids claiming a universal app while silently shipping arm64.
+# SwiftPM 在 Apple Silicon 主机上默认只生成 native slice，显式构建 Intel slice
+# 包含两个 C 目标（CModemBridge、CUACProbe），避免将 arm64-only 二进制伪称 Universal
 INTEL_ROOT="${BUILD_ROOT}/notifier-x86_64"
 rm -rf "${INTEL_ROOT}"
 mkdir -p "${INTEL_ROOT}/module-cache"
@@ -56,7 +61,7 @@ xcrun swiftc -O -target x86_64-apple-macosx13.0 -sdk "$(xcrun --show-sdk-path)" 
   -I Sources/CModemBridge/include -I Sources/CUACProbe/include \
   Sources/DJOneHubNotifier/*.swift "${INTEL_ROOT}/ModemBridge.o" "${INTEL_ROOT}/CUACProbe.o" \
   -framework CoreAudio -framework CoreFoundation -framework IOKit -framework AVFoundation \
-  -framework AppKit -framework UserNotifications -framework Contacts \
+  -framework AppKit -framework UserNotifications -framework Contacts -framework ServiceManagement \
   -o "${INTEL_ROOT}/DJOneHubNotifier"
 rm -f "${BUILD_ROOT}/DJOneHubNotifier-universal"
 lipo -create "${NOTIFIER_SRC}/.build/release/DJOneHubNotifier" "${INTEL_ROOT}/DJOneHubNotifier" \
@@ -66,37 +71,31 @@ for arch in arm64 x86_64; do
   lipo "${BUILD_ROOT}/DJOneHubNotifier-universal" -verify_arch "${arch}"
 done
 
-echo "==> 3/4 组装安装目录"
+echo "==> 2/3 组装 DJOneHub.app Bundle"
 rm -rf "${STAGE}"
-mkdir -p "${STAGE}/DJOneHubNotifier.app/Contents/MacOS" "${STAGE}/DJOneHubNotifier.app/Contents/Resources"
-ditto --norsrc --noextattr --noqtn --noacl "${ROOT_DIR}/dist/release/DJOneHub-macOS-universal-${VERSION}" "${STAGE}/djonehub"
-cp "${BUILD_ROOT}/DJOneHubNotifier-universal" "${STAGE}/DJOneHubNotifier.app/Contents/MacOS/DJOneHubNotifier"
-cp "${NOTIFIER_SRC}/Info.plist" "${STAGE}/DJOneHubNotifier.app/Contents/Info.plist"
-cp "${NOTIFIER_SRC}/Resources/AppIcon.icns" "${STAGE}/DJOneHubNotifier.app/Contents/Resources/AppIcon.icns"
-chmod 755 "${STAGE}/DJOneHubNotifier.app/Contents/MacOS/DJOneHubNotifier"
-codesign --force --deep --sign - "${STAGE}/DJOneHubNotifier.app"
-codesign --verify --deep --strict "${STAGE}/DJOneHubNotifier.app"
-plutil -lint "${STAGE}/DJOneHubNotifier.app/Contents/Info.plist"
+mkdir -p "${STAGE}"
+"${ROOT_DIR}/scripts/create-app-bundle.sh" "${VERSION}" universal "${STAGE}/DJOneHub.app" "${BUILD_ROOT}/DJOneHubNotifier-universal"
+
+# 校验双架构
 for binary in \
-  "${STAGE}/DJOneHubNotifier.app/Contents/MacOS/DJOneHubNotifier" \
-  "${STAGE}/djonehub/bin/djonehub-macos" \
-  "${STAGE}/djonehub/lib/libusb-1.0.0.dylib"
+  "${STAGE}/DJOneHub.app/Contents/MacOS/DJOneHub" \
+  "${STAGE}/DJOneHub.app/Contents/Resources/djonehub-macos" \
+  "${STAGE}/DJOneHub.app/Contents/Resources/lib/libusb-1.0.0.dylib"
 do
   for arch in arm64 x86_64; do
     lipo "${binary}" -verify_arch "${arch}"
   done
 done
-cp "${ROOT_DIR}/scripts/dmg/安装 DJOneHub.command" "${STAGE}/安装 DJOneHub.command"
-cp "${ROOT_DIR}/scripts/dmg/卸载 DJOneHub.command" "${STAGE}/卸载 DJOneHub.command"
-cp "${ROOT_DIR}/scripts/dmg/使用说明.txt" "${STAGE}/使用说明.txt"
-chmod 755 "${STAGE}/安装 DJOneHub.command" "${STAGE}/卸载 DJOneHub.command"
 
+# 公开 DMG 不能包含模块侧通话运行时
 if find "${STAGE}" -type f \( -name '*.ko' -o -name '*.armv7' \) | grep -q .; then
   echo "Public DMG unexpectedly contains a module-side runtime." >&2
   exit 1
 fi
 
-echo "==> 4/4 生成 DMG"
+echo "==> 3/3 创建 Applications 快捷方式并生成 DMG"
+ln -s /Applications "${STAGE}/Applications"
+
 rm -f "${DMG}" "${CHECKSUM}"
 hdiutil create -volname "DJOneHub" -srcfolder "${STAGE}" -ov -format UDZO "${DMG}"
 hdiutil verify "${DMG}"
@@ -106,5 +105,5 @@ hdiutil verify "${DMG}"
 )
 
 echo
-echo "完成：${DMG}"
+echo "✅ DMG 创建完成: ${DMG}"
 echo "校验：${CHECKSUM}"

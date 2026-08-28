@@ -93,21 +93,19 @@ GOCACHE="${BUILD_ROOT}/go-cache"
 rm -rf "${GOCACHE}"
 mkdir -p "${GOCACHE}"
 export GOCACHE
+SDKROOT="$(xcrun --show-sdk-path)" CC="$(xcrun -f clang)" \
 PKG_CONFIG_PATH="${LIBUSB_SOURCE}" \
 MACOSX_DEPLOYMENT_TARGET=13.0 CGO_ENABLED=1 GOOS=darwin GOARCH=arm64 go build \
   -p 2 \
   -trimpath -buildvcs=false -ldflags="-s -w" \
   -o "${STAGE_DIR}/bin/djonehub-macos" ./cmd/djonehub-macos
-
 cp "${LIBUSB_PREFIX}/lib/libusb-1.0.0.dylib" "${STAGE_DIR}/lib/libusb-1.0.0.dylib"
-cp "${ROOT_DIR}/packaging/djonehub" "${STAGE_DIR}/djonehub"
-cp "${ROOT_DIR}/packaging/install" "${STAGE_DIR}/install"
 cp "${ROOT_DIR}/packaging/README.md" "${STAGE_DIR}/README.md"
 cp "${ROOT_DIR}/LICENSE" "${STAGE_DIR}/LICENSE"
 cp "${LIBUSB_SOURCE}/COPYING" "${STAGE_DIR}/licenses/libusb-COPYING"
 cp "${ROOT_DIR}/packaging/THIRD_PARTY_NOTICES.md" "${STAGE_DIR}/THIRD_PARTY_NOTICES.md"
 
-chmod 755 "${STAGE_DIR}/djonehub" "${STAGE_DIR}/install" "${STAGE_DIR}/bin/djonehub-macos" "${STAGE_DIR}/lib/libusb-1.0.0.dylib"
+chmod 755 "${STAGE_DIR}/bin/djonehub-macos" "${STAGE_DIR}/lib/libusb-1.0.0.dylib"
 codesign --force --sign - "${STAGE_DIR}/lib/libusb-1.0.0.dylib"
 codesign --force --sign - "${STAGE_DIR}/bin/djonehub-macos"
 

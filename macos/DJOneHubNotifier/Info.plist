@@ -7,11 +7,13 @@
 	<key>CFBundleDisplayName</key>
 	<string>DJOneHub</string>
 	<key>CFBundleExecutable</key>
-	<string>DJOneHubNotifier</string>
+	<string>DJOneHub</string>
 	<key>CFBundleIconFile</key>
+	<string>AppIcon.icns</string>
+	<key>CFBundleIconName</key>
 	<string>AppIcon</string>
 	<key>CFBundleIdentifier</key>
-	<string>com.jamie.djonehub.notifier</string>
+	<string>com.jamie.djonehub</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
