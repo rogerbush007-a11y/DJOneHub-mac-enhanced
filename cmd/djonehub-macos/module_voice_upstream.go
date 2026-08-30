@@ -37,11 +37,21 @@ type voiceRuntimeManifest struct {
 	RequiredDevices []string `json:"requiredDevices"`
 }
 
+// moduleVoiceSession keeps the prepared ADB transport alive across ATD/ATA.
+// This module stops accepting a fresh ADB CNXN once a voice call becomes
+// active, while an already connected transport remains usable. The media
+// route is still activated only after CLCC reports an active voice call.
+type moduleVoiceSession struct {
+	adb      *adbClient
+	manifest *voiceRuntimeManifest
+}
+
 func (a *app) voiceStatus() map[string]any {
 	a.moduleVoiceMu.Lock()
 	defer a.moduleVoiceMu.Unlock()
 	installed, installDetail := upstreamVoiceRuntimeInstalled()
 	return map[string]any{
+		"prepared":          a.moduleVoicePrepared,
 		"ready":             a.moduleVoiceReady,
 		"last_attempt":      a.moduleVoiceLast,
 		"last_error":        a.moduleVoiceErr,
@@ -53,13 +63,80 @@ func (a *app) voiceStatus() map[string]any {
 	}
 }
 
-// kickModuleVoice used to start the complete D4/UAC route during application
-// launch. MaVo's verified lifecycle keeps the media route closed until CLCC
-// reports an active call, so startup must not claim or enable the UAC path.
-// Runtime preparation will be split from route activation separately; until
-// then ensureModuleVoiceRoute remains the single, call-scoped entry point.
+// kickModuleVoice prepares a persistent ADB session and the module runtime,
+// but deliberately leaves the D4/UAC media route disabled. Keeping the ADB
+// transport alive is necessary on firmware that will not accept a new ADB
+// CNXN after a call becomes active.
 func (a *app) kickModuleVoice() {
-	log.Printf("module voice: media route deferred until call becomes active")
+	if err := a.prepareModuleVoiceSession(); err != nil {
+		log.Printf("module voice: background preparation failed: %v", err)
+		return
+	}
+	log.Printf("module voice: runtime prepared; media route deferred until call becomes active")
+}
+
+func (a *app) prepareModuleVoiceSession() error {
+	a.moduleVoiceOpMu.Lock()
+	defer a.moduleVoiceOpMu.Unlock()
+	return a.prepareModuleVoiceSessionLocked()
+}
+
+func (a *app) prepareModuleVoiceSessionBudgeted(budget time.Duration) error {
+	a.moduleVoiceMu.Lock()
+	prepared := a.moduleVoicePrepared
+	a.moduleVoiceMu.Unlock()
+	if prepared {
+		return nil
+	}
+	done := make(chan error, 1)
+	go func() { done <- a.prepareModuleVoiceSession() }()
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(budget):
+		return errors.New("语音运行时仍在准备中")
+	}
+}
+
+func (a *app) prepareModuleVoiceSessionLocked() error {
+	if a.moduleVoiceSession != nil && a.moduleVoiceSession.adb != nil {
+		return nil
+	}
+	manifest, err := loadVoiceManifest()
+	if err != nil {
+		return err
+	}
+	adb, err := openDJIUSBADB()
+	if err != nil {
+		return err
+	}
+	if err := prepareModuleVoiceRuntime(adb, manifest); err != nil {
+		adb.Close()
+		return err
+	}
+	a.moduleVoiceSession = &moduleVoiceSession{adb: adb, manifest: manifest}
+	a.moduleVoiceMu.Lock()
+	a.moduleVoicePrepared = true
+	a.moduleVoiceMu.Unlock()
+	return nil
+}
+
+func (a *app) resetModuleVoiceSession() {
+	a.moduleVoiceOpMu.Lock()
+	defer a.moduleVoiceOpMu.Unlock()
+	a.closeModuleVoiceSessionLocked()
+}
+
+func (a *app) closeModuleVoiceSessionLocked() {
+	if a.moduleVoiceSession != nil && a.moduleVoiceSession.adb != nil {
+		a.moduleVoiceSession.adb.Close()
+	}
+	a.moduleVoiceSession = nil
+	a.moduleVoiceMu.Lock()
+	a.moduleVoicePrepared = false
+	a.moduleVoiceReady = false
+	a.moduleVoiceLast = time.Time{}
+	a.moduleVoiceMu.Unlock()
 }
 
 func (a *app) setVoiceStatus(ready bool, err error, detail string) {
@@ -106,7 +183,12 @@ func (a *app) ensureModuleVoiceRouteLocked() error {
 	a.moduleVoiceMu.Unlock()
 
 	log.Printf("module voice: starting route")
-	err := a.startModuleVoiceRoute()
+	if err := a.prepareModuleVoiceSessionLocked(); err != nil {
+		log.Printf("module voice: preparation failed: %v", err)
+		a.setVoiceStatus(false, err, "")
+		return err
+	}
+	err := a.startModuleVoiceRouteLocked()
 	if err != nil {
 		log.Printf("module voice: start failed: %v", err)
 		a.setVoiceStatus(false, err, "")
@@ -141,6 +223,7 @@ func (a *app) ensureModuleVoiceRouteBudgeted(budget time.Duration) error {
 func (a *app) stopModuleVoiceRoute() {
 	a.moduleVoiceOpMu.Lock()
 	defer a.moduleVoiceOpMu.Unlock()
+	defer a.closeModuleVoiceSessionLocked()
 
 	a.moduleVoiceMu.Lock()
 	if !a.moduleVoiceReady {
@@ -161,17 +244,7 @@ func (a *app) stopModuleVoiceRoute() {
 	log.Printf("module voice: route stopped")
 }
 
-func (a *app) startModuleVoiceRoute() error {
-	manifest, err := loadVoiceManifest()
-	if err != nil {
-		return err
-	}
-	adb, err := openDJIUSBADB()
-	if err != nil {
-		return err
-	}
-	defer adb.Close()
-
+func prepareModuleVoiceRuntime(adb *adbClient, manifest *voiceRuntimeManifest) error {
 	// prepare(): root check, kernel check, deploy runtime, load drivers,
 	// calibrate VoLTE ACDB, verify voice endpoints and helper self-test.
 	out, status, err := adb.shellChecked("id -u", 8*time.Second)
@@ -254,6 +327,15 @@ func (a *app) startModuleVoiceRoute() error {
 		return fmt.Errorf("模块 PCM 桥自检失败: %w", err)
 	}
 	log.Printf("module voice: runtime prepared (%s)", manifest.RuntimeVersion)
+	return nil
+}
+
+func (a *app) startModuleVoiceRouteLocked() error {
+	if a.moduleVoiceSession == nil || a.moduleVoiceSession.adb == nil || a.moduleVoiceSession.manifest == nil {
+		return errors.New("模块语音 ADB session 尚未准备")
+	}
+	adb := a.moduleVoiceSession.adb
+	manifest := a.moduleVoiceSession.manifest
 
 	// startRouteOnly(): launch the voice-route-session helper and wait until
 	// the UAC route is RUNNING.
@@ -276,11 +358,13 @@ func (a *app) startModuleVoiceRoute() error {
 	// and verify instead of treating a lost reply as a failed start.
 	if launchErr != nil {
 		adb.Close()
-		adb, err = openDJIUSBADB()
+		newADB, err := openDJIUSBADB()
 		if err != nil {
+			a.moduleVoiceSession.adb = nil
 			return fmt.Errorf("路由启动后 ADB 重连失败: %w（启动错误: %v）", err, launchErr)
 		}
-		defer adb.Close()
+		adb = newADB
+		a.moduleVoiceSession.adb = newADB
 	}
 	for i := 0; i < 30; i++ {
 		ready, rerr := voiceRouteIsReady(adb, manifest)
@@ -302,15 +386,11 @@ func (a *app) startModuleVoiceRoute() error {
 
 // stopModuleVoiceRouteInnerLocked runs with moduleVoiceOpMu held by the caller.
 func (a *app) stopModuleVoiceRouteInnerLocked() error {
-	manifest, err := loadVoiceManifest()
-	if err != nil {
-		return err
+	if a.moduleVoiceSession == nil || a.moduleVoiceSession.adb == nil || a.moduleVoiceSession.manifest == nil {
+		return errors.New("模块语音 ADB session 不可用")
 	}
-	adb, err := openDJIUSBADB()
-	if err != nil {
-		return err
-	}
-	defer adb.Close()
+	manifest := a.moduleVoiceSession.manifest
+	adb := a.moduleVoiceSession.adb
 	helperPath := voiceRemoteDir + "/" + manifest.Helper
 	stopCommand := "helper_stopped=1; " +
 		"is_owned() { " +

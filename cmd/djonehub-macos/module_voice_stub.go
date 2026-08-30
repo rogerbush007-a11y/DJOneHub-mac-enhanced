@@ -8,9 +8,17 @@ import (
 	"time"
 )
 
+type moduleVoiceSession struct{}
+
 // Module-side voice route control is macOS-only for now.
 
 func (a *app) kickModuleVoice() {}
+
+func (a *app) prepareModuleVoiceSessionBudgeted(_ time.Duration) error {
+	return errors.New("模块语音路由仅在 macOS 版本可用")
+}
+
+func (a *app) resetModuleVoiceSession() {}
 
 func (a *app) ensureModuleVoiceRoute() error {
 	return errors.New("模块语音路由仅在 macOS 版本可用")

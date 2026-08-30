@@ -23,6 +23,7 @@ final class CallCenter: ObservableObject {
     private var maVoAudioStarting = false
     private var maVoAudioCallID: String?
     private var maVoHostRegistered = false
+    private var maVoHostRegisteredAt: Date?
 
     /// 新来电（呼入且响铃/等待）时回调，用于弹窗/聚焦主窗口。
     var onIncoming: ((CallRecord) -> Void)?
@@ -46,6 +47,7 @@ final class CallCenter: ObservableObject {
         pollTask = nil
         maVoAudio.stop()
         maVoHostRegistered = false
+        maVoHostRegisteredAt = nil
         Task { _ = try? await api.setMaVoAudioHostEnabled(false) }
     }
 
@@ -56,14 +58,20 @@ final class CallCenter: ObservableObject {
         do {
             let status = try await api.callStatus()
             isOnline = true
-            if !maVoHostRegistered {
+            let registrationExpired = maVoHostRegisteredAt.map {
+                Date().timeIntervalSince($0) >= 10
+            } ?? true
+            if !maVoHostRegistered || registrationExpired {
                 do {
                     try await api.setMaVoAudioHostEnabled(true)
                     maVoHostRegistered = true
+                    maVoHostRegisteredAt = Date()
                 } catch {
                     // The backend can take tens of seconds to enumerate USB
                     // after a restart. Keep the old route until registration
                     // succeeds, then retry on the next poll.
+                    maVoHostRegistered = false
+                    maVoHostRegisteredAt = nil
                     lastError = error.localizedDescription
                 }
             }
@@ -101,6 +109,8 @@ final class CallCenter: ObservableObject {
             }
         } catch {
             isOnline = false
+            maVoHostRegistered = false
+            maVoHostRegisteredAt = nil
             lastError = error.localizedDescription
         }
     }

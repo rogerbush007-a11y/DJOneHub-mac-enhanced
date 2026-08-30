@@ -386,6 +386,9 @@ func (a *app) answerCall(w http.ResponseWriter, _ *http.Request) {
 	}
 	a.lastAnswerAt = time.Now()
 	a.callMu.Unlock()
+	if err := a.prepareModuleVoiceSessionBudgeted(2 * time.Second); err != nil {
+		log.Printf("module voice preflight before ATA did not finish: %v", err)
+	}
 
 	response, err := a.runATCommand("ATA", 5*time.Second)
 	if err != nil {
@@ -473,6 +476,9 @@ func (a *app) dialCall(w http.ResponseWriter, r *http.Request) {
 	if a.demo {
 		writeJSON(w, http.StatusOK, map[string]bool{"dialing": true})
 		return
+	}
+	if err := a.prepareModuleVoiceSessionBudgeted(6 * time.Second); err != nil {
+		log.Printf("module voice preflight before ATD did not finish: %v", err)
 	}
 	response, err := a.runATCommand("ATD"+number+";", 8*time.Second)
 	if err != nil {

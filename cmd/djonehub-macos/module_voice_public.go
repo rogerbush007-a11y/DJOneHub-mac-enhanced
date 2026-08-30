@@ -8,10 +8,18 @@ import (
 	"time"
 )
 
+type moduleVoiceSession struct{}
+
 // This public-source adapter intentionally does not contain module-side voice
 // binaries. It keeps call control and diagnostics buildable without claiming
 // that a Mac can route call audio.
 func (a *app) kickModuleVoice() {}
+
+func (a *app) prepareModuleVoiceSessionBudgeted(_ time.Duration) error {
+	return errors.New("公开源码版未包含模块侧语音运行时")
+}
+
+func (a *app) resetModuleVoiceSession() {}
 
 func (a *app) ensureModuleVoiceRoute() error {
 	return errors.New("公开源码版未包含模块侧语音运行时")
