@@ -2042,7 +2042,7 @@ private struct ModuleSetupCard: View {
             Button("启用", role: .destructive) { initialize() }
             Button("取消", role: .cancel) {}
         } message: {
-            Text("兼容原始模块、旧 UAC 配置及其他工具留下的完整 USB 配置。将先备份当前配置，再补齐通话所需接口并重启模块；过程中 4G 会短暂断开。验证失败会自动恢复原始配置，并显示具体原因。")
+            Text("将先备份 USB 配置；如 ADB 未开启，会尝试完成模块 ADB 调试授权，再启用通话接口并重启模块，过程中 4G 会短暂断开。ADB 授权可能持久保存，请仅连接可信电脑。通话路由验证失败会尝试恢复原始 USB 配置，但不会撤销 ADB 授权。")
         }
     }
 

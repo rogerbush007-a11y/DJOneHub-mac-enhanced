@@ -59,17 +59,10 @@ func (c usbComposition) isUACTarget() bool {
 		(c.VendorID == djiUSBVendorID && c.ProductID == djiUSBProductID)
 }
 
-func (c usbComposition) isLegacyUACTarget() bool {
-	return c.VendorID == quectelUSBVendorID && c.ProductID == quectelUSBProductID &&
-		len(c.Flags) == 7 && strings.Join(intSliceStrings(c.Flags), ",") == "1,1,1,1,1,0,1"
-}
-
-// isCallAudioCapable covers both known module USB Audio compositions. Some
-// QDC507 revisions expose UAC with ADB disabled and acknowledge, but retain,
-// that legacy bit layout. Rewriting it to the full ADB layout is unnecessary
-// for call audio and makes a successful no-op look like a failed setup.
+// UAC alone is insufficient: the module-side voice route also needs ADB.
+// Locked firmware may acknowledge USBCFG but leave the ADB bit disabled.
 func (c usbComposition) isCallAudioCapable() bool {
-	return c.isUACTarget() || c.isLegacyUACTarget()
+	return c.isUACTarget()
 }
 
 func (c usbComposition) isFactoryDJI() bool {
@@ -276,23 +269,9 @@ func (a *app) runModuleSetup() {
 		a.setModuleSetup(moduleSetupStatus{State: "failed", Summary: "无法保存模块回滚备份", Detail: err.Error()})
 		return
 	}
-	// Preserve either observed UAC layout. Legacy UAC already exposes the
-	// module audio interface, so forcing its ADB flag to 1 provides no benefit
-	// and some firmware keeps the flag unchanged despite returning OK.
-	if !original.isCallAudioCapable() {
-		target := usbComposition{VendorID: quectelUSBVendorID, ProductID: quectelUSBProductID, Flags: []int{1, 1, 1, 1, 1, 1, 1}}
-		write, err := a.runATCommand(target.command(), 8*time.Second)
-		if err != nil || atResponseIsError(write) {
-			a.setModuleSetup(moduleSetupStatus{State: "failed", Summary: "模块拒绝 USB 音频配置", Detail: firstNonEmpty(errString(err), write), BackupPath: backupPath})
-			return
-		}
-		readBack, err := a.runATCommand(`AT+QCFG="USBCFG"`, 5*time.Second)
-		actual, parseErr := parseUSBComposition(readBack)
-		if err != nil || parseErr != nil || !actual.isCallAudioCapable() {
-			detail := firstNonEmpty(errString(err), errString(parseErr), readBack)
-			a.setModuleSetup(moduleSetupStatus{State: "failed", Summary: "USB 配置回读未确认，未重启模块", Detail: detail, BackupPath: backupPath})
-			return
-		}
+	if err := prepareModuleCallUSB(original, a.runModuleSetupAT); err != nil {
+		a.setModuleSetup(moduleSetupStatus{State: "failed", Summary: "通话接口准备未完成", Detail: err.Error(), BackupPath: backupPath})
+		return
 	}
 	volteResponse, err := a.runATCommand(`AT+QCFG="volte_disable"`, 5*time.Second)
 	if err != nil || !strings.Contains(strings.ReplaceAll(strings.ToLower(volteResponse), "_", "/"), `"volte/disable",0`) {
