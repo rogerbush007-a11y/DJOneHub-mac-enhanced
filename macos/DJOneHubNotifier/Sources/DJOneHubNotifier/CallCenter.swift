@@ -20,9 +20,11 @@ final class CallCenter: ObservableObject {
     private var lastActiveID: String?
     private var pollInFlight = false
     private let maVoAudio = VoiceAudioService()
+    private let outgoingRingback = OutgoingRingbackPlayer()
     private var maVoAudioStarting = false
     private var maVoAudioCallID: String?
     private var maVoHostRegistered = false
+    private var lastEndedCallID: String?
 
     /// 新来电（呼入且响铃/等待）时回调，用于弹窗/聚焦主窗口。
     var onIncoming: ((CallRecord) -> Void)?
@@ -44,6 +46,7 @@ final class CallCenter: ObservableObject {
     func stop() {
         pollTask?.cancel()
         pollTask = nil
+        outgoingRingback.stop()
         maVoAudio.stop()
         maVoHostRegistered = false
         Task { _ = try? await api.setMaVoAudioHostEnabled(false) }
@@ -72,7 +75,19 @@ final class CallCenter: ObservableObject {
             activeCall = status.active
             history = status.history ?? []
 
+            if let active = status.active,
+               active.id != lastEndedCallID,
+               active.direction == "outgoing",
+               active.state == "dialing" || active.state == "alerting" {
+                outgoingRingback.start()
+            } else {
+                outgoingRingback.stop()
+            }
+
             if status.active == nil, previousID != nil {
+                // CLCC can briefly return the just-ended call once more after
+                // ATH succeeds. Do not restart ringback for that stale record.
+                lastEndedCallID = previousID
                 if isRecording { maVoAudio.stopRecording { _ in } }
                 isRecording = false
                 maVoAudio.stop()
@@ -149,6 +164,7 @@ final class CallCenter: ObservableObject {
 
     func hangup() {
         isMuted = false
+        outgoingRingback.stop()
         if isRecording { maVoAudio.stopRecording { _ in } }
         isRecording = false
         maVoAudio.stop()

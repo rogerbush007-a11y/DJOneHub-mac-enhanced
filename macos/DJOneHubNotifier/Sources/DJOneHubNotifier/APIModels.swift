@@ -1,5 +1,28 @@
 import Foundation
 
+func makeDJOneHubJSONDecoder() -> JSONDecoder {
+    let decoder = JSONDecoder()
+    decoder.dateDecodingStrategy = .custom { decoder in
+        let container = try decoder.singleValueContainer()
+        let raw = try container.decode(String.self)
+        for options: ISO8601DateFormatter.Options in [
+            [.withInternetDateTime, .withFractionalSeconds],
+            [.withInternetDateTime],
+        ] {
+            let formatter = ISO8601DateFormatter()
+            formatter.formatOptions = options
+            if let date = formatter.date(from: raw) {
+                return date
+            }
+        }
+        throw DecodingError.dataCorruptedError(
+            in: container,
+            debugDescription: "Invalid ISO 8601 date: \(raw)"
+        )
+    }
+    return decoder
+}
+
 struct CallRecord: Codable, Equatable, Sendable, Identifiable {
     let id: String
     let index: Int
@@ -185,11 +208,9 @@ private struct APIErrorPayload: Decodable {
 struct DJOneHubAPI: Sendable {
     let baseURL: URL
 
-    private static let decoder: JSONDecoder = {
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        return decoder
-    }()
+    private static func decode<T: Decodable>(_ type: T.Type, from data: Data) throws -> T {
+        try makeDJOneHubJSONDecoder().decode(type, from: data)
+    }
 
     func callStatus() async throws -> CallStatus {
         try await get(path: "api/calls/status")
@@ -213,7 +234,7 @@ struct DJOneHubAPI: Sendable {
             throw APIError.invalidResponse
         }
         try Self.requireSuccess(http, data: data)
-        return try Self.decoder.decode(NetworkCheckResult.self, from: data).ok
+        return try Self.decode(NetworkCheckResult.self, from: data).ok
     }
 
     func modemStatus() async throws -> ModemStatus {
@@ -254,7 +275,7 @@ struct DJOneHubAPI: Sendable {
             throw APIError.invalidResponse
         }
         try Self.requireSuccess(http, data: data)
-        return try Self.decoder.decode(RejectResponse.self, from: data)
+        return try Self.decode(RejectResponse.self, from: data)
     }
 
     private func get<T: Decodable>(path: String) async throws -> T {
@@ -266,12 +287,12 @@ struct DJOneHubAPI: Sendable {
             throw APIError.invalidResponse
         }
         try Self.requireSuccess(http, data: data)
-        return try Self.decoder.decode(T.self, from: data)
+        return try Self.decode(T.self, from: data)
     }
 
     private static func requireSuccess(_ response: HTTPURLResponse, data: Data) throws {
         guard (200..<300).contains(response.statusCode) else {
-            let message = (try? decoder.decode(APIErrorPayload.self, from: data))?.error
+            let message = (try? decode(APIErrorPayload.self, from: data))?.error
             throw APIError.http(response.statusCode, message)
         }
     }
@@ -332,7 +353,7 @@ extension DJOneHubAPI {
             throw APIError.invalidResponse
         }
         try Self.requireSuccess(http, data: data)
-        return try Self.decoder.decode(SMSSendResult.self, from: data)
+        return try Self.decode(SMSSendResult.self, from: data)
     }
 
     private func patch<Body: Encodable>(path: String, body: Body) async throws {
@@ -386,7 +407,7 @@ extension DJOneHubAPI {
         }
         try Self.requireSuccess(http, data: data)
         do {
-            return try Self.decoder.decode(Response.self, from: data)
+            return try Self.decode(Response.self, from: data)
         } catch {
             if let unreadablePayloadMessage {
                 throw APIError.unreadablePayload(unreadablePayloadMessage)
@@ -407,6 +428,12 @@ struct CellularPolicyStatus: Codable, Sendable {
     enum CodingKeys: String, CodingKey {
         case forceOff = "force_off"
         case services
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        forceOff = try container.decode(Bool.self, forKey: .forceOff)
+        services = try container.decodeIfPresent([String].self, forKey: .services) ?? []
     }
 }
 

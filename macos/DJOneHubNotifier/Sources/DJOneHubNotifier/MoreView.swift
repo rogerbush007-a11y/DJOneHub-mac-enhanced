@@ -27,6 +27,7 @@ struct MoreView: View {
     @State private var atBusy = false
     @State private var message = ""
     @State private var busy = false
+    @State private var usbProfileBusy = true
     @State private var showMobileProfileConfirm = false
     @State private var showMacProfileConfirm = false
 
@@ -169,7 +170,7 @@ struct MoreView: View {
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
-                    .disabled(busy || usbProfile == nil)
+                    .disabled(busy || usbProfileBusy || usbProfile == nil)
                 }
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
@@ -483,8 +484,7 @@ struct MoreView: View {
     }
 
     private func refreshAll() async {
-        busy = true
-        defer { busy = false }
+        usbProfileBusy = true
         async let m: ModemStatus? = try? calls.apiClient.modemStatus()
         async let t: NetworkTrafficSnapshot? = try? calls.apiClient.networkTraffic()
         async let p: CellularPolicyStatus? = try? calls.apiClient.cellularPolicy()
@@ -492,10 +492,13 @@ struct MoreView: View {
         async let e: ESIMOverview? = try? calls.apiClient.esimOverview()
         async let h: ESIMHealth? = try? calls.apiClient.esimHealth()
         async let n: [String: ESIMNote]? = try? calls.apiClient.esimNotes()
+        // Connection mode must not wait behind slower eSIM, traffic, or modem
+        // status calls. It is the recovery control for those same failure modes.
+        usbProfile = await u
+        usbProfileBusy = false
         modem = await m
         traffic = await t
         policy = await p
-        usbProfile = await u
         esim = await e
         esimHealth = await h
         esimNotes = await n ?? [:]
@@ -503,7 +506,11 @@ struct MoreView: View {
 
     private func applyUSBProfile(_ mode: String) async {
         busy = true
-        defer { busy = false }
+        usbProfileBusy = true
+        defer {
+            usbProfileBusy = false
+            busy = false
+        }
         do {
             usbProfile = try await calls.apiClient.setUSBProfile(mode)
             message = usbProfile?.message ?? (mode == "mobile" ? "已保存 iPhone / iPad 模式" : "正在恢复 Mac 完整模式")

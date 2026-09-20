@@ -745,7 +745,7 @@ private struct MessagesView: View {
                 Text(L10n.t("短信"))
                     .font(.title3.weight(.semibold))
                 if !ownNumber.isEmpty {
-                    Text(ownNumber)
+                    Text("\(L10n.t("本机号码："))\(ownNumber)")
                         .font(.caption.monospacedDigit())
                         .foregroundStyle(.secondary)
                 }

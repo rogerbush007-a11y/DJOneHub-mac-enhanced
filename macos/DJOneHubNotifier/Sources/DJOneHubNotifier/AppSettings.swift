@@ -154,6 +154,7 @@ enum L10n {
         // 短信
         "新信息": "New Message",
         "撰写新短信": "New Message",
+        "本机号码：": "My number: ",
         "收件人：": "To:",
         "输入号码或姓名": "Number or name",
         "从通讯录选择": "Pick from Contacts",

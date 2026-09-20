@@ -1,6 +1,10 @@
 package main
 
-import "testing"
+import (
+	"errors"
+	"strings"
+	"testing"
+)
 
 func TestPortScore(t *testing.T) {
 	tests := []struct {
@@ -82,6 +86,29 @@ func TestParseUSBConfigRejectsUnknownLayout(t *testing.T) {
 	}
 }
 
+func TestMobileProfileMessageKeepsADBFailureNonBlockingAndVisible(t *testing.T) {
+	message := mobileProfileMessage(errors.New("ADB interface not found"), false)
+	for _, want := range []string{"已保存 iPhone/iPad 模式", "直接拔出", "未提供 ADB", "网络保持可能受限"} {
+		if !strings.Contains(message, want) {
+			t.Fatalf("mobile profile warning %q missing %q", message, want)
+		}
+	}
+	if message := mobileProfileMessage(nil, false); strings.Contains(message, "ADB") {
+		t.Fatalf("successful network wake should not show an ADB warning: %q", message)
+	}
+}
+
+func TestSignalRecoveryPausesWhileMobileProfileWaitsForReconnect(t *testing.T) {
+	a := &app{usbProfileMobileArmed: true}
+	if !a.signalRecoveryPaused() {
+		t.Fatal("cellular recovery must pause while the mobile profile is armed")
+	}
+	a.usbProfileMobileArmed = false
+	if a.signalRecoveryPaused() {
+		t.Fatal("cellular recovery must resume after the Mac profile is restored")
+	}
+}
+
 func TestParseMacNetworkServices(t *testing.T) {
 	input := `An asterisk (*) denotes that a network service is disabled.
 (1) Wi-Fi
@@ -128,6 +155,11 @@ func TestIsDJICellularServiceRelaxed(t *testing.T) {
 			want:    true,
 		},
 		{
+			name:    "module product service",
+			service: macNetworkService{Name: "EG25G-QDC507", HardwarePort: "EG25G-QDC507", Device: "en8"},
+			want:    true,
+		},
+		{
 			name:    "not a cellular service",
 			service: macNetworkService{Name: "Wi-Fi", HardwarePort: "Wi-Fi", Device: "en0"},
 			want:    false,
@@ -144,6 +176,41 @@ func TestIsDJICellularServiceRelaxed(t *testing.T) {
 				t.Fatalf("isDJICellularService(%+v) = %v, want %v", tt.service, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestParseHiddenMacNetworkServices(t *testing.T) {
+	services, err := parseMacNetworkServicesPreferences([]byte(`{
+  "NetworkServices": {
+    "hidden-cellular": {
+      "UserDefinedName": "Baiwang",
+      "Interface": {
+        "DeviceName": "en4",
+        "Hardware": "Ethernet",
+        "UserDefinedName": "Ethernet Adapter (en4)",
+        "HiddenConfiguration": true
+      }
+    },
+    "vpn": {
+      "UserDefinedName": "Shadowrocket",
+      "Interface": {"Type": "VPN"}
+    }
+  }
+}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(services) != 1 || services[0].Name != "Baiwang" || services[0].Device != "en4" {
+		t.Fatalf("hidden services = %+v, want Baiwang on en4", services)
+	}
+}
+
+func TestMergeMacNetworkServicesDeduplicatesVisibleEntries(t *testing.T) {
+	visible := []macNetworkService{{Name: "Wi-Fi", Device: "en0"}, {Name: "Baiwang", Device: "en4"}}
+	hidden := []macNetworkService{{Name: "Baiwang", Device: "en4"}, {Name: "DJI 4G", Device: "en4"}}
+	merged := mergeMacNetworkServices(visible, hidden)
+	if len(merged) != 3 {
+		t.Fatalf("merged services = %+v, want three unique name/device pairs", merged)
 	}
 }
 
@@ -172,8 +239,8 @@ func TestIsLocallyAdministeredMAC(t *testing.T) {
 func TestSelectUnprovisionedUSBInterface(t *testing.T) {
 	interfaces := []macNetInterface{
 		{Name: "en0", Kind: "ethernet", MAC: "ac:de:48:00:11:22"},
-		{Name: "en8", Kind: "ethernet", MAC: "3e:cc:eb:30:27:93"},
-		{Name: "en10", Kind: "ethernet", MAC: "02:00:00:00:00:01"},
+		{Name: "en8", Kind: "ethernet", Status: "active", MAC: "3e:cc:eb:30:27:93"},
+		{Name: "en10", Kind: "ethernet", Status: "active", MAC: "02:00:00:00:00:01"},
 		{Name: "awdl0", Kind: "apple-wireless", MAC: "3e:00:00:00:00:01"},
 	}
 	services := []macNetworkService{
@@ -184,6 +251,27 @@ func TestSelectUnprovisionedUSBInterface(t *testing.T) {
 	}
 	if got := selectUnprovisionedUSBInterface(nil, services); got != "" {
 		t.Fatalf("selectUnprovisionedUSBInterface(nil) = %q, want empty", got)
+	}
+}
+
+func TestSelectUnprovisionedUSBInterfaceIgnoresStaleHiddenService(t *testing.T) {
+	interfaces := []macNetInterface{
+		{Name: "en4", Kind: "ethernet", Status: "inactive", MAC: "66:a4:1c:1b:16:7b"},
+		{Name: "en8", Kind: "ethernet", Status: "active", MAC: "ae:44:3d:9d:bb:90"},
+	}
+	services := []macNetworkService{{Name: "Baiwang", HardwarePort: "Ethernet Adapter (en4)", Device: "en4"}}
+	if got := selectUnprovisionedUSBInterface(interfaces, services); got != "en8" {
+		t.Fatalf("selectUnprovisionedUSBInterface = %q, want newly enumerated en8", got)
+	}
+}
+
+func TestUSBTrafficInterfaceAcceptsGlobalIPv6Only(t *testing.T) {
+	interfaces := []macNetInterface{
+		{Name: "en0", Kind: "ethernet", Status: "active", IPv4: "192.168.1.2"},
+		{Name: "en8", Kind: "ethernet", Status: "active", IPv4: "169.254.196.67", IPv6: "2409:8929:e47:ddd2::1"},
+	}
+	if got := selectUSBTrafficInterface(interfaces, macDefaultRoute{Interface: "en0"}); got != "en8" {
+		t.Fatalf("selectUSBTrafficInterface = %q, want IPv6-capable en8", got)
 	}
 }
 

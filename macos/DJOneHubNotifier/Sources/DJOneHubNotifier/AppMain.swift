@@ -35,6 +35,34 @@ enum SelfTest {
             timestamp: Date()
         )
         precondition(NotificationText.smsPreview(longMessage, limit: 8) == "第一行 第二行以…")
+        let incomingJSON = Data(#"""
+        {
+            "active": {
+                "id": "incoming-1",
+                "index": 1,
+                "direction": "incoming",
+                "state": "incoming",
+                "number": "10086",
+                "started_at": "2026-09-20T11:40:22.614566+08:00",
+                "updated_at": "2026-09-20T11:40:22+08:00",
+                "ended_at": null,
+                "missed": false
+            },
+            "history": null,
+            "polling": true,
+            "poll_interval_s": 3,
+            "last_poll_error": ""
+        }
+        """#.utf8)
+        let status = try! makeDJOneHubJSONDecoder().decode(CallStatus.self, from: incomingJSON)
+        precondition(status.active?.state == "incoming")
+        let policy = try! makeDJOneHubJSONDecoder().decode(
+            CellularPolicyStatus.self,
+            from: Data(#"{"force_off":false,"services":null}"#.utf8)
+        )
+        precondition(!policy.forceOff && policy.services.isEmpty)
+        precondition(OutgoingRingbackPlayer.toneData.starts(with: Data("RIFF".utf8)))
+        precondition(OutgoingRingbackPlayer.toneData.count > 88_000)
         print("DJOneHubNotifier self-test passed")
     }
 }
@@ -314,8 +342,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } catch {
             consecutiveErrors += 1
             if consecutiveErrors == 5 {
+                // A loaded backend may only be waiting for USB re-enumeration.
+                // Restarting it here discards an incoming call that the modem
+                // already reported and makes the notification disappear.
                 await ensureModuleServices()
-                await restartModuleServices()
                 panel.show(
                     .error(message: error.localizedDescription),
                     onReject: {},
@@ -633,6 +663,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func showIncoming(_ call: CallRecord) {
+        NSLog("DJOneHub incoming call notification: %@", NotificationText.displayNumber(call.number))
         ringtoneStore.startRinging()
         panel.show(
             .incoming(
