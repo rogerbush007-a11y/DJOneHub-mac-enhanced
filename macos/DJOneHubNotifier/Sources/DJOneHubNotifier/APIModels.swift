@@ -191,6 +191,27 @@ struct DJOneHubAPI: Sendable {
         return decoder
     }()
 
+    private func authenticatedRequest(path: String) -> URLRequest {
+        var request = URLRequest(url: baseURL.appending(path: path))
+        if let token = Self.localAPIToken() {
+            request.setValue(token, forHTTPHeaderField: "X-DJOneHub-Token")
+        }
+        return request
+    }
+
+    private static func localAPIToken() -> String? {
+        guard let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
+            return nil
+        }
+        let url = base.appendingPathComponent("DJOneHub/api-token", isDirectory: false)
+        guard let data = try? Data(contentsOf: url),
+              let value = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !value.isEmpty else {
+            return nil
+        }
+        return value
+    }
+
     func callStatus() async throws -> CallStatus {
         try await get(path: "api/calls/status")
     }
@@ -204,7 +225,7 @@ struct DJOneHubAPI: Sendable {
     }
 
     func isUsingCellularRoute() async throws -> Bool {
-        var request = URLRequest(url: baseURL.appending(path: "api/network/check-4g"))
+        var request = authenticatedRequest(path: "api/network/check-4g")
         request.httpMethod = "POST"
         request.cachePolicy = .reloadIgnoringLocalCacheData
         request.timeoutInterval = 5
@@ -246,7 +267,7 @@ struct DJOneHubAPI: Sendable {
     }
 
     func rejectCall() async throws -> RejectResponse {
-        var request = URLRequest(url: baseURL.appending(path: "api/calls/reject"))
+        var request = authenticatedRequest(path: "api/calls/reject")
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         let (data, response) = try await URLSession.shared.data(for: request)
@@ -258,7 +279,7 @@ struct DJOneHubAPI: Sendable {
     }
 
     private func get<T: Decodable>(path: String) async throws -> T {
-        var request = URLRequest(url: baseURL.appending(path: path))
+        var request = authenticatedRequest(path: path)
         request.cachePolicy = .reloadIgnoringLocalCacheData
         request.timeoutInterval = 5
         let (data, response) = try await URLSession.shared.data(for: request)
@@ -322,7 +343,7 @@ extension DJOneHubAPI {
     }
 
     func sendSMS(to phone: String, message: String) async throws -> SMSSendResult {
-        var request = URLRequest(url: baseURL.appending(path: "api/sms/send"))
+        var request = authenticatedRequest(path: "api/sms/send")
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONEncoder().encode(["phone": phone, "message": message])
@@ -339,12 +360,16 @@ extension DJOneHubAPI {
         try await send(method: "PATCH", path: path, body: body)
     }
 
+    private func put<Body: Encodable>(path: String, body: Body) async throws {
+        try await send(method: "PUT", path: path, body: body)
+    }
+
     private func delete<Body: Encodable>(path: String, body: Body) async throws {
         try await send(method: "DELETE", path: path, body: body)
     }
 
     private func send<Body: Encodable>(method: String, path: String, body: Body) async throws {
-        var request = URLRequest(url: baseURL.appending(path: path))
+        var request = authenticatedRequest(path: path)
         request.httpMethod = method
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONEncoder().encode(body)
@@ -357,7 +382,7 @@ extension DJOneHubAPI {
     }
 
     private func post<Body: Encodable>(path: String, body: Body) async throws {
-        var request = URLRequest(url: baseURL.appending(path: path))
+        var request = authenticatedRequest(path: path)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONEncoder().encode(body)
@@ -375,7 +400,7 @@ extension DJOneHubAPI {
         timeout: TimeInterval = 5,
         unreadablePayloadMessage: String? = nil
     ) async throws -> Response {
-        var request = URLRequest(url: baseURL.appending(path: path))
+        var request = authenticatedRequest(path: path)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONEncoder().encode(body)
@@ -612,7 +637,7 @@ extension DJOneHubAPI {
     }
 
     func saveESIMNote(iccid: String, label: String, phone: String, tags: String) async throws {
-        try await post(
+        try await put(
             path: "api/esim/notes",
             body: ["iccid": iccid, "label": label, "phone": phone, "tags": tags]
         )

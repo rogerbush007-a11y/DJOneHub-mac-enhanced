@@ -132,7 +132,7 @@ type activeBarrier struct {
 
 type Arbiter struct {
 	// 64 位 atomic 变量必须放在头部
-	seq              uint64
+	seq uint64
 
 	deviceID string
 	opts     Options

@@ -154,7 +154,7 @@ func TestUICCAPDUAppendsStatusWordFromStatusField(t *testing.T) {
 		case MessageTypeCommand:
 			data := []byte{0xBF, 0x3E, 0x12, 0x5A, 0x10} // 仅数据,无 SW
 			resp := make([]byte, 12+len(data))
-			le.PutUint32(resp[0:], 0x90)             // Status = SW1 0x90(此固件成功)
+			le.PutUint32(resp[0:], 0x90)              // Status = SW1 0x90(此固件成功)
 			le.PutUint32(resp[4:], uint32(len(data))) // Response length
 			le.PutUint32(resp[8:], 12)                // Response offset
 			copy(resp[12:], data)

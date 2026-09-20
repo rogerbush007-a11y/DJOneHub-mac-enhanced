@@ -166,7 +166,7 @@ func (a *app) applyCallPoll(calls []parsedCall, now time.Time) {
 			a.activeCall.Missed = a.activeCall.Direction == "incoming" &&
 				(a.activeCall.State == "incoming" || a.activeCall.State == "waiting")
 			log.Printf("call ended: number=%q state=%q direction=%q duration=%s",
-				a.activeCall.Number, a.activeCall.State, a.activeCall.Direction,
+				redactPhoneForLog(a.activeCall.Number), a.activeCall.State, a.activeCall.Direction,
 				now.Sub(a.activeCall.StartedAt).Round(time.Second))
 			a.callHistory = append([]callRecord{*a.activeCall}, a.callHistory...)
 			if len(a.callHistory) > 100 {
@@ -206,7 +206,7 @@ func (a *app) applyCallPoll(calls []parsedCall, now time.Time) {
 			UpdatedAt: now,
 		}
 		a.activeCall = record
-		log.Printf("call started: number=%q state=%q direction=%q", selected.Number, selected.State, selected.Direction)
+		log.Printf("call started: number=%q state=%q direction=%q", redactPhoneForLog(selected.Number), selected.State, selected.Direction)
 		if selected.Direction == "incoming" && (selected.State == "incoming" || selected.State == "waiting") {
 			copy := *record
 			notify = &copy
@@ -216,7 +216,7 @@ func (a *app) applyCallPoll(calls []parsedCall, now time.Time) {
 		prevState := a.activeCall.State
 		a.activeCall.State = selected.State
 		if prevState != selected.State {
-			log.Printf("call state %q -> %q (number=%q)", prevState, selected.State, selected.Number)
+			log.Printf("call state %q -> %q (number=%q)", prevState, selected.State, redactPhoneForLog(selected.Number))
 		}
 		a.activeCall.UpdatedAt = now
 		if selected.Number != "" {
@@ -483,12 +483,24 @@ func (a *app) dialCall(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
 	}
-	log.Printf("dial call: ATD%s; -> %s", number, strings.TrimSpace(response))
+	log.Printf("dial call: number=%s -> %s", redactPhoneForLog(number), strings.TrimSpace(response))
 	writeJSON(w, http.StatusOK, map[string]any{
 		"dialing":  true,
 		"number":   number,
 		"response": response,
 	})
+}
+
+func redactPhoneForLog(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	runes := []rune(value)
+	if len(runes) <= 4 {
+		return "****"
+	}
+	return "****" + string(runes[len(runes)-4:])
 }
 
 // validateCallATResponse keeps command echoes and modem ERROR replies from

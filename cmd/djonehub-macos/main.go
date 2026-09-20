@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/subtle"
 	"embed"
 	"encoding/base64"
 	"encoding/hex"
@@ -94,6 +96,7 @@ type app struct {
 	smsMu          sync.RWMutex
 	smsOperationMu sync.Mutex
 	sms            []receivedSMS
+	smsCachePath   string
 	smsSendMu      sync.Mutex
 	smsReassembler *smscodec.Reassembler
 
@@ -163,6 +166,8 @@ type app struct {
 	lostSignalCount  int
 	lastModemReboot  time.Time
 	lastNetworkCheck time.Time
+
+	apiToken string
 }
 
 type usbInterfaceStatus struct {
@@ -329,6 +334,9 @@ func main() {
 				audio:            newAudioRouter(),
 				webConsole:       webConsole,
 			}
+			if err := instance.loadSMSCache(); err != nil {
+				log.Printf("load persistent SMS cache: %v", err)
+			}
 			if usbDevice != nil {
 				log.Printf("DJI USB device detected without AT serial port: %s %s (%s:%s)",
 					usbDevice.Vendor, usbDevice.Product, usbDevice.VendorID, usbDevice.ProductID)
@@ -388,6 +396,9 @@ func main() {
 		callPollInterval: 3 * time.Second,
 		audio:            newAudioRouter(),
 		webConsole:       webConsole,
+	}
+	if err := instance.loadSMSCache(); err != nil {
+		log.Printf("load persistent SMS cache: %v", err)
 	}
 	manager.SetSMSCallback(instance.recordSMS)
 	if err := manager.Start(); err != nil {
@@ -461,6 +472,11 @@ func (a *app) installESIMManager(manager *esim.Manager, switchAllowed bool) bool
 }
 
 func serve(instance *app, listen string) {
+	token, err := ensureAPIToken()
+	if err != nil {
+		log.Fatalf("initialize local API authentication: %v", err)
+	}
+	instance.apiToken = token
 	server := &http.Server{
 		Addr:              listen,
 		Handler:           instance.routes(),
@@ -714,9 +730,14 @@ func usbSpeedName(speed int) string {
 }
 
 func (a *app) recordSMS(sender, content string, timestamp time.Time) {
-	a.mergeSMS([]receivedSMS{{
+	newCount, _ := a.mergeSMS([]receivedSMS{{
 		Sender: sender, Content: content, Timestamp: timestamp,
 	}})
+	if newCount > 0 {
+		if err := a.persistSMSCache(); err != nil {
+			log.Printf("persist SMS cache: %v", err)
+		}
+	}
 }
 
 func (a *app) mergeSMS(messages []receivedSMS) (newCount int, total int) {
@@ -799,6 +820,15 @@ func (a *app) pollSMSOnce() error {
 		return err
 	}
 	newCount, total := a.mergeSMS(messages)
+	// Never delete the modem copy until the local durable cache has been
+	// committed. This keeps an unexpected service restart from erasing inbox
+	// history that existed only in memory.
+	if newCount > 0 {
+		if err := a.persistSMSCache(); err != nil {
+			a.setSMSPollStatus(err)
+			return fmt.Errorf("persist SMS cache before module cleanup: %w", err)
+		}
+	}
 	if a.smsAutoCleanupME && len(messages) > 0 {
 		before, after, cleanupErr := a.clearUSBATSMSMemory("ME")
 		if cleanupErr != nil {
@@ -1119,6 +1149,7 @@ func (a *app) routes() http.Handler {
 	mux.HandleFunc("POST /api/network/check-proxy", a.checkProxyRoute)
 	mux.HandleFunc("POST /api/network/usbnet", a.setUSBNetMode)
 	mux.HandleFunc("POST /api/network/reboot-module", a.rebootModule)
+	mux.HandleFunc("POST /api/module/network-wake/uninstall", a.uninstallModuleNetworkWakeAPI)
 	mux.HandleFunc("GET /api/usb/profile", a.usbProfile)
 	mux.HandleFunc("POST /api/usb/profile", a.setUSBProfile)
 	mux.HandleFunc("GET /api/esim", a.esimOverview)
@@ -1138,7 +1169,7 @@ func (a *app) routes() http.Handler {
 			panic(fmt.Sprintf("open embedded web console: %v", err))
 		}
 		mux.Handle("/", http.FileServer(http.FS(assets)))
-		return securityHeaders(mux)
+		return a.localSecurity(mux)
 	}
 
 	// macOS 日常操作迁移到独立 App；根路径保留兼容提示。
@@ -1147,7 +1178,7 @@ func (a *app) routes() http.Handler {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("DJOneHub 已迁移到 macOS 应用，请使用 DJOneHub App 完成全部操作。"))
 	})
-	return securityHeaders(mux)
+	return a.localSecurity(mux)
 }
 
 func (a *app) platformInfo(w http.ResponseWriter, _ *http.Request) {
@@ -1163,13 +1194,126 @@ func (a *app) platformInfo(w http.ResponseWriter, _ *http.Request) {
 	})
 }
 
-func securityHeaders(next http.Handler) http.Handler {
+func (a *app) localSecurity(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Referrer-Policy", "no-referrer")
+		w.Header().Set("Cache-Control", "no-store")
+		if !isLoopbackHTTPHost(r.Host) {
+			writeError(w, http.StatusForbidden, "invalid local host")
+			return
+		}
+		if origin := strings.TrimSpace(r.Header.Get("Origin")); origin != "" && !isLoopbackHTTPOrigin(origin) {
+			writeError(w, http.StatusForbidden, "cross-origin request rejected")
+			return
+		}
+		if strings.HasPrefix(r.URL.Path, "/api/") {
+			supplied := strings.TrimSpace(r.Header.Get("X-DJOneHub-Token"))
+			if supplied == "" {
+				if cookie, err := r.Cookie("djonehub_session"); err == nil {
+					supplied = cookie.Value
+				}
+			}
+			if !secureTokenEqual(supplied, a.apiToken) {
+				writeError(w, http.StatusUnauthorized, "local API authentication required")
+				return
+			}
+			if requestMayContainJSON(r) && r.ContentLength != 0 {
+				mediaType := strings.ToLower(strings.TrimSpace(strings.Split(r.Header.Get("Content-Type"), ";")[0]))
+				if mediaType != "application/json" {
+					writeError(w, http.StatusUnsupportedMediaType, "Content-Type must be application/json")
+					return
+				}
+			}
+		} else if r.Method == http.MethodGet {
+			http.SetCookie(w, &http.Cookie{
+				Name: "djonehub_session", Value: a.apiToken, Path: "/",
+				HttpOnly: true, SameSite: http.SameSiteStrictMode,
+			})
+		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+func requestMayContainJSON(r *http.Request) bool {
+	switch r.Method {
+	case http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete:
+		return true
+	default:
+		return false
+	}
+}
+
+func isLoopbackHTTPHost(raw string) bool {
+	host := raw
+	if parsed, _, err := net.SplitHostPort(raw); err == nil {
+		host = parsed
+	}
+	host = strings.Trim(host, "[]")
+	return strings.EqualFold(host, "localhost") || host == "127.0.0.1" || host == "::1"
+}
+
+func isLoopbackHTTPOrigin(raw string) bool {
+	parsed, err := url.Parse(raw)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+		return false
+	}
+	return isLoopbackHTTPHost(parsed.Host)
+}
+
+func secureTokenEqual(got, want string) bool {
+	if got == "" || want == "" || len(got) != len(want) {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(got), []byte(want)) == 1
+}
+
+func ensureAPIToken() (string, error) {
+	configDir, err := os.UserConfigDir()
+	if err != nil {
+		return "", err
+	}
+	dir := filepath.Join(configDir, "DJOneHub")
+	path := filepath.Join(dir, "api-token")
+	if data, readErr := os.ReadFile(path); readErr == nil {
+		token := strings.TrimSpace(string(data))
+		if len(token) >= 64 {
+			_ = os.Chmod(path, 0o600)
+			return token, nil
+		}
+	} else if !errors.Is(readErr, os.ErrNotExist) {
+		return "", readErr
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", err
+	}
+	random := make([]byte, 32)
+	if _, err := rand.Read(random); err != nil {
+		return "", err
+	}
+	token := hex.EncodeToString(random)
+	temporary, err := os.CreateTemp(dir, ".api-token-*")
+	if err != nil {
+		return "", err
+	}
+	temporaryPath := temporary.Name()
+	defer os.Remove(temporaryPath)
+	if err := temporary.Chmod(0o600); err != nil {
+		temporary.Close()
+		return "", err
+	}
+	if _, err := temporary.WriteString(token + "\n"); err != nil {
+		temporary.Close()
+		return "", err
+	}
+	if err := temporary.Close(); err != nil {
+		return "", err
+	}
+	if err := os.Rename(temporaryPath, path); err != nil {
+		return "", err
+	}
+	return token, nil
 }
 
 func (a *app) health(w http.ResponseWriter, _ *http.Request) {
@@ -1480,7 +1624,7 @@ func (a *app) readUSBATSMSFromMemory(memory string) ([]receivedSMS, error) {
 				continue
 			}
 			msg.Content = content
-			log.Printf("USB AT long SMS reassembled: sender=%s segments=%d", msg.Sender, concat.Total)
+			log.Printf("USB AT long SMS reassembled: sender=%s segments=%d", redactPhoneForLog(msg.Sender), concat.Total)
 		}
 		messages = append(messages, msg)
 	}
@@ -1537,8 +1681,88 @@ func (a *app) clearAllUSBATSMS() ([]smsStorageClearResult, error) {
 
 func (a *app) clearSMSCache() {
 	a.smsMu.Lock()
-	defer a.smsMu.Unlock()
 	a.sms = nil
+	a.smsMu.Unlock()
+	if err := a.persistSMSCache(); err != nil {
+		log.Printf("persist cleared SMS cache: %v", err)
+	}
+}
+
+func (a *app) smsCacheFile() (string, error) {
+	if a.smsCachePath != "" {
+		return a.smsCachePath, nil
+	}
+	configDir, err := os.UserConfigDir()
+	if err != nil {
+		return "", err
+	}
+	a.smsCachePath = filepath.Join(configDir, "DJOneHub", "sms-cache.json")
+	return a.smsCachePath, nil
+}
+
+func (a *app) loadSMSCache() error {
+	if a.demo {
+		return nil
+	}
+	path, err := a.smsCacheFile()
+	if err != nil {
+		return err
+	}
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var messages []receivedSMS
+	if err := json.Unmarshal(data, &messages); err != nil {
+		return fmt.Errorf("decode %s: %w", path, err)
+	}
+	if len(messages) > 500 {
+		messages = messages[:500]
+	}
+	a.smsMu.Lock()
+	a.sms = messages
+	a.smsMu.Unlock()
+	return nil
+}
+
+func (a *app) persistSMSCache() error {
+	if a.demo {
+		return nil
+	}
+	path, err := a.smsCacheFile()
+	if err != nil {
+		return err
+	}
+	a.smsMu.RLock()
+	data, err := json.MarshalIndent(a.sms, "", "  ")
+	a.smsMu.RUnlock()
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	temporary, err := os.CreateTemp(filepath.Dir(path), ".sms-cache-*")
+	if err != nil {
+		return err
+	}
+	temporaryPath := temporary.Name()
+	defer os.Remove(temporaryPath)
+	if err := temporary.Chmod(0o600); err != nil {
+		temporary.Close()
+		return err
+	}
+	if _, err := temporary.Write(data); err != nil {
+		temporary.Close()
+		return err
+	}
+	if err := temporary.Close(); err != nil {
+		return err
+	}
+	return os.Rename(temporaryPath, path)
 }
 
 func parseUSBATCPMSUsed(resp string) int {
@@ -1878,6 +2102,10 @@ func (a *app) executeAT(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "command must start with AT")
 		return
 	}
+	if !manualATCommandAllowed(body.Command) {
+		writeError(w, http.StatusForbidden, "为保护 SIM、网络和 USB 配置，正式版 AT 调试仅允许只读诊断命令")
+		return
+	}
 	if a.demo {
 		response, _ := a.runATCommand(body.Command, 20*time.Second)
 		writeJSON(w, http.StatusOK, map[string]string{"response": response})
@@ -1889,6 +2117,23 @@ func (a *app) executeAT(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"response": response})
+}
+
+func manualATCommandAllowed(command string) bool {
+	normalized := strings.ToUpper(strings.Join(strings.Fields(strings.TrimSpace(command)), ""))
+	if strings.ContainsAny(normalized, "\r\n;") {
+		return false
+	}
+	allowed := map[string]bool{
+		"AT": true, "ATI": true, "AT+GMR": true, "AT+CGMI": true,
+		"AT+CGMM": true, "AT+CGSN": true, "AT+CSQ": true,
+		"AT+COPS?": true, "AT+CPIN?": true, "AT+CNUM": true,
+		"AT+CREG?": true, "AT+CEREG?": true, "AT+QNWINFO": true,
+		"AT+QGPS?": true, "AT+QGPSLOC=2": true,
+		`AT+QCFG="USBNET"`: true, `AT+QCFG="USBCFG"`: true,
+		`AT+QCFG="USBCFG"?`: true, `AT+QCFG="IMS"`: true,
+	}
+	return allowed[normalized]
 }
 
 func (a *app) networkDiagnostic(w http.ResponseWriter, _ *http.Request) {

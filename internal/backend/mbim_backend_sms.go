@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"strings"
 
 	"github.com/iniwex5/vohive/pkg/logger"
 	"github.com/iniwex5/vohive/pkg/smscodec"
@@ -27,8 +28,17 @@ func (b *MBIMBackend) SendSMSWithOptions(ctx context.Context, to, body string, o
 			return fmt.Errorf("发送第 %d/%d 段失败: %w", i+1, len(tpdus), err)
 		}
 	}
-	logger.Info("MBIM 短信发送成功", "to", to, "parts", len(tpdus))
+	logger.Info("MBIM 短信发送成功", "to", redactSMSRecipient(to), "parts", len(tpdus))
 	return nil
+}
+
+func redactSMSRecipient(value string) string {
+	value = strings.TrimSpace(value)
+	runes := []rune(value)
+	if len(runes) <= 4 {
+		return "****"
+	}
+	return "****" + string(runes[len(runes)-4:])
 }
 
 func (b *MBIMBackend) ReadSMS(ctx context.Context, index int) (*SMS, error) {

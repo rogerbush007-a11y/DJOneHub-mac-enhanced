@@ -826,7 +826,7 @@ func (q *QMIBackend) SendSMSWithOptions(ctx context.Context, to, body string, op
 		sendStart := time.Now()
 		if err := q.source.WMSSendRawMessage(ctx, 0x06, pduWithSMSC); err != nil {
 			logger.Warn("QMI 短信发送失败",
-				"to", to,
+				"to", redactSMSRecipient(to),
 				"part", i+1,
 				"parts", len(tpdus),
 				"tpdu_len", len(binaryTPDU),
@@ -838,7 +838,7 @@ func (q *QMIBackend) SendSMSWithOptions(ctx context.Context, to, body string, op
 		}
 	}
 
-	logger.Info("QMI 短信发送成功", "to", to, "parts", len(tpdus), "encoding", opts.Encoding)
+	logger.Info("QMI 短信发送成功", "to", redactSMSRecipient(to), "parts", len(tpdus), "encoding", opts.Encoding)
 	return nil
 }
 

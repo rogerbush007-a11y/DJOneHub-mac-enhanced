@@ -1028,10 +1028,10 @@ func (m *Manager) doForEachEUICC(aids [][]byte, fn func(client *lpa.Client, aid 
 			logger.Debug("eUICC AID 扫描阶段",
 				"device", m.deviceID,
 				"stage", "eid_ok",
-				"AID", aidHex,
-				"EID", eidStr)
+				"AID", redactIdentifier(aidHex),
+				"EID", redactIdentifier(eidStr))
 			if seenEIDs[eidStr] {
-				logger.Debug("跳过重复 EID", "AID", aidHex, "EID", eidStr)
+				logger.Debug("跳过重复 EID", "AID", redactIdentifier(aidHex), "EID", redactIdentifier(eidStr))
 				return nil
 			}
 
@@ -1073,7 +1073,7 @@ func (m *Manager) GetEIDs() ([]EUICCInfo, error) {
 		if err := m.forEachEUICC(func(client *lpa.Client, aid []byte, eidStr string) error {
 			euiccInfo := buildDiscoveredEUICCInfo(aid, eidStr)
 			result = append(result, euiccInfo)
-			logger.Info("发现 eUICC", "device", m.deviceID, "AID", euiccInfo.AIDHex, "EID", eidStr)
+			logger.Info("发现 eUICC", "device", m.deviceID, "AID", redactIdentifier(euiccInfo.AIDHex), "EID", redactIdentifier(eidStr))
 			return nil
 		}); err != nil {
 			return nil, err
@@ -1825,16 +1825,16 @@ func (m *Manager) findAIDForICCID(targetICCID string) ([]byte, error) {
 			logger.Debug("查找 ICCID 所属 eUICC",
 				"device", m.deviceID,
 				"stage", "select_open_start",
-				"ICCID", targetICCID,
-				"AID", aidHex,
+				"ICCID", redactIdentifier(targetICCID),
+				"AID", redactIdentifier(aidHex),
 				"triedCount", triedCount)
 			client, err := m.createLPAWithAID(aid)
 			if err != nil {
 				logger.Debug("查找 ICCID 所属 eUICC",
 					"device", m.deviceID,
 					"stage", "select_open_failed",
-					"ICCID", targetICCID,
-					"AID", aidHex,
+					"ICCID", redactIdentifier(targetICCID),
+					"AID", redactIdentifier(aidHex),
 					"err", err)
 				return false, err
 			}
@@ -1842,29 +1842,29 @@ func (m *Manager) findAIDForICCID(targetICCID string) ([]byte, error) {
 			logger.Debug("查找 ICCID 所属 eUICC",
 				"device", m.deviceID,
 				"stage", "select_open_ok",
-				"ICCID", targetICCID,
-				"AID", aidHex)
+				"ICCID", redactIdentifier(targetICCID),
+				"AID", redactIdentifier(aidHex))
 
 			logger.Debug("查找 ICCID 所属 eUICC",
 				"device", m.deviceID,
 				"stage", "profiles_start",
-				"ICCID", targetICCID,
-				"AID", aidHex)
+				"ICCID", redactIdentifier(targetICCID),
+				"AID", redactIdentifier(aidHex))
 			profiles, err := listBasicProfiles(client)
 			if err != nil {
 				logger.Debug("查找 ICCID 所属 eUICC",
 					"device", m.deviceID,
 					"stage", "profiles_failed",
-					"ICCID", targetICCID,
-					"AID", aidHex,
+					"ICCID", redactIdentifier(targetICCID),
+					"AID", redactIdentifier(aidHex),
 					"err", err)
 				return false, err
 			}
 			logger.Debug("查找 ICCID 所属 eUICC",
 				"device", m.deviceID,
 				"stage", "profiles_ok",
-				"ICCID", targetICCID,
-				"AID", aidHex,
+				"ICCID", redactIdentifier(targetICCID),
+				"AID", redactIdentifier(aidHex),
 				"profileCount", len(profiles))
 			for _, p := range profiles {
 				if p.ICCID.String() == iccid.String() {
@@ -1880,8 +1880,8 @@ func (m *Manager) findAIDForICCID(targetICCID string) ([]byte, error) {
 		if found {
 			logger.Info("找到 ICCID 所属 eUICC",
 				"device", m.deviceID,
-				"ICCID", targetICCID,
-				"AID", fmt.Sprintf("%X", aid))
+				"ICCID", redactIdentifier(targetICCID),
+				"AID", redactIdentifier(fmt.Sprintf("%X", aid)))
 			return aid, nil
 		}
 	}
@@ -2080,7 +2080,7 @@ func (m *Manager) SwitchProfileWithResult(ctx context.Context, targetICCID strin
 		if err != nil {
 			return result, fmt.Errorf("无效的 AID hex %q: %w", aidHex, err)
 		}
-		logger.Info("使用前端传入的 AID", "device", m.deviceID, "AID", aidHex)
+		logger.Info("使用前端传入的 AID", "device", m.deviceID, "AID", redactIdentifier(aidHex))
 	} else {
 		// 回退：遍历查找
 		targetAID, err = m.findAIDForICCID(targetICCID)
@@ -3089,8 +3089,8 @@ func (m *Manager) DownloadProfile(ctx context.Context, aidHex, smdp, matchingID,
 	logger.Info("开始下载 eSIM profile",
 		"device", m.deviceID,
 		"smdp", parsedURL.Host,
-		"matchingID", matchingID,
-		"AID", aidHex)
+		"matching_id_present", strings.TrimSpace(matchingID) != "",
+		"AID", redactIdentifier(aidHex))
 
 	installStarted := false
 	opts := &lpa.DownloadOptions{
@@ -3112,8 +3112,8 @@ func (m *Manager) DownloadProfile(ctx context.Context, aidHex, smdp, matchingID,
 		logger.Warn("下载 eSIM profile 失败",
 			"device", m.deviceID,
 			"smdp", parsedURL.Host,
-			"matchingID", matchingID,
-			"AID", aidHex,
+			"matching_id_present", strings.TrimSpace(matchingID) != "",
+			"AID", redactIdentifier(aidHex),
 			"freeNvram_before", beforeFreeNvramBytes,
 			"error_code", downloadErr.Code,
 			"bpp_command_id", downloadErr.BPPCommandID,

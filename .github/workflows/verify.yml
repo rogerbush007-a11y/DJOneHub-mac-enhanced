@@ -1,0 +1,36 @@
+name: Verify source
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  macos:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Install native build dependency
+        run: brew install libusb pkg-config
+      - name: Check Go formatting
+        run: test -z "$(gofmt -l cmd internal pkg)"
+      - name: Test Go backend
+        run: go test ./...
+      - name: Vet Go backend
+        run: go vet ./...
+      - name: Build native macOS app
+        working-directory: macos/DJOneHubNotifier
+        run: swift build --disable-sandbox -c release
+      - name: Check installer scripts
+        run: |
+          zsh -n "scripts/dmg/安装 DJOneHub.command"
+          zsh -n "scripts/dmg/卸载 DJOneHub.command"
+          sh -n cmd/djonehub-macos/module_network_wake.sh
+          sh -n cmd/djonehub-macos/module_network_wake_init.sh

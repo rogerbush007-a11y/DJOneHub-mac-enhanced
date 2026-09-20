@@ -16,9 +16,9 @@ func buildUICCAppListInfoForTest(apps []UICCApplication) []byte {
 	n := len(apps)
 	ptrStart := 16
 	out := make([]byte, ptrStart+n*8)
-	le.PutUint32(out[0:], 1)          // Version
-	le.PutUint32(out[4:], uint32(n))  // ApplicationCount
-	le.PutUint32(out[8:], 0)          // ActiveApplicationIndex
+	le.PutUint32(out[0:], 1)         // Version
+	le.PutUint32(out[4:], uint32(n)) // ApplicationCount
+	le.PutUint32(out[8:], 0)         // ActiveApplicationIndex
 	dataStart := len(out)
 	for i, app := range apps {
 		structOff := len(out)

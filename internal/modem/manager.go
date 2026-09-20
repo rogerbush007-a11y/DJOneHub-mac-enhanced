@@ -376,10 +376,10 @@ func (m *Manager) DialCall(number string) error {
 	cmd := fmt.Sprintf("ATD%s;", number)
 	_, err := m.ExecuteAT(cmd, 60*time.Second)
 	if err != nil {
-		logger.Error(fmt.Sprintf("[%s] 拨号失败", m.cfg.ID), "err", err, "number", number)
+		logger.Error(fmt.Sprintf("[%s] 拨号失败", m.cfg.ID), "err", err, "number", redactIdentifier(number))
 		return err
 	}
-	logger.Info(fmt.Sprintf("[%s] 拨号指令已发出", m.cfg.ID), "number", number)
+	logger.Info(fmt.Sprintf("[%s] 拨号指令已发出", m.cfg.ID), "number", redactIdentifier(number))
 	return nil
 }
 
@@ -877,7 +877,7 @@ func (m *Manager) initModem() {
 
 	// 3. 采集设备信息
 	m.collectDeviceInfo()
-	logger.Info(fmt.Sprintf("[%s] 模组初始化完成", m.cfg.ID), "imei", m.imei, "iccid", m.iccid)
+	logger.Info(fmt.Sprintf("[%s] 模组初始化完成", m.cfg.ID), "imei", redactIdentifier(m.imei), "iccid", redactIdentifier(m.iccid))
 }
 
 // RefreshDeviceInfo 重新采集设备信息（切卡后需要更新缓存）
@@ -1512,7 +1512,7 @@ func (m *Manager) readAndProcessSMSFromStorage(storage, index string) {
 		return
 	}
 
-	logger.Debug(fmt.Sprintf("[%s] 短信内容", m.cfg.ID), "sender", sender, "content", content)
+	logger.Debug(fmt.Sprintf("[%s] 收到短信", m.cfg.ID), "sender", redactIdentifier(sender), "content_length", len([]rune(content)))
 
 	// 回调通知
 	if m.smsCallback != nil {
@@ -1965,7 +1965,7 @@ func (m *Manager) SendSMSWithOptions(phone, message string, opts smscodec.Submit
 	m.SetBusy(true)
 	defer m.SetBusy(false)
 
-	logger.Info(fmt.Sprintf("[%s] 准备发送短信 (PDU)", m.cfg.ID), "to", phone)
+	logger.Info(fmt.Sprintf("[%s] 准备发送短信 (PDU)", m.cfg.ID), "to", redactIdentifier(phone))
 
 	// 确保处于 PDU 模式
 	if _, err := m.ExecuteATHigh("AT+CMGF=0", 3*time.Second); err != nil {
@@ -2133,7 +2133,7 @@ func (m *Manager) ExecuteUSSD(command string, timeout time.Duration) (*USSDResul
 	default:
 	}
 
-	logger.Info(fmt.Sprintf("[%s] 开始执行 USSD: %s", m.cfg.ID, command), "timeout", timeout.String())
+	logger.Info(fmt.Sprintf("[%s] 开始执行 USSD", m.cfg.ID), "code", "[redacted]", "timeout", timeout.String())
 
 	// 设置字符集，避免部分模组因使用非 GSM 的短信格式导致发不出去 USSD
 	m.ExecuteATSilent(`AT+CSCS="GSM"`, 2*time.Second)

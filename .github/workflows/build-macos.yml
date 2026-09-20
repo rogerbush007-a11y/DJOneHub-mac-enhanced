@@ -1,0 +1,47 @@
+name: Build macOS package
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Package version label
+        required: true
+        default: v1.2.10-security.1
+
+permissions:
+  contents: read
+  id-token: write
+  attestations: write
+  artifact-metadata: write
+
+jobs:
+  package:
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Install build helper
+        run: brew install pkg-config
+      - name: Build universal DMG
+        env:
+          PACKAGE_VERSION: ${{ inputs.version }}
+        run: scripts/build-dmg-universal.sh "$PACKAGE_VERSION"
+      - name: Record build provenance
+        uses: actions/attest@v4
+        with:
+          subject-path: |
+            dist/*.dmg
+            dist/*.dmg.sha256
+      - name: Upload package
+        uses: actions/upload-artifact@v4
+        with:
+          name: DJOneHub-macOS-${{ inputs.version }}
+          path: |
+            dist/*.dmg
+            dist/*.dmg.sha256
+          if-no-files-found: error
+          retention-days: 30

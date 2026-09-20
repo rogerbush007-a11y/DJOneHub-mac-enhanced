@@ -14,10 +14,18 @@ owned_pid() {
 
 case "${1:-}" in
 start)
-    owned_pid && exit 0
-    rm -f "$PIDFILE"
-    mkdir -p /data/djonehub/log
-    nohup setsid "$DAEMON" </dev/null >>"$LOGFILE" 2>&1 &
+	owned_pid && exit 0
+	rm -f "$PIDFILE"
+	mkdir -p /data/djonehub/log
+	if test -f "$LOGFILE"; then
+		bytes=$(wc -c <"$LOGFILE" 2>/dev/null || echo 0)
+		case "$bytes" in ''|*[!0-9]*) bytes=0;; esac
+		if test "$bytes" -gt 1048576; then
+			rm -f "$LOGFILE.1"
+			mv "$LOGFILE" "$LOGFILE.1"
+		fi
+	fi
+	nohup setsid "$DAEMON" </dev/null >>"$LOGFILE" 2>&1 &
     sleep 1
     owned_pid
     ;;
