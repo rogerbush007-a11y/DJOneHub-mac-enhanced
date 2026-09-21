@@ -187,6 +187,9 @@ func (a *app) applyCallPoll(calls []parsedCall, now time.Time) {
 			log.Printf("voice audio routing stopped")
 		}
 		if callEnded {
+			a.publishEvent(callEvent{Type: "ended"})
+		}
+		if callEnded {
 			go func() {
 				time.Sleep(1500 * time.Millisecond)
 				a.stopModuleVoiceRoute()
@@ -217,6 +220,10 @@ func (a *app) applyCallPoll(calls []parsedCall, now time.Time) {
 		a.activeCall.State = selected.State
 		if prevState != selected.State {
 			log.Printf("call state %q -> %q (number=%q)", prevState, selected.State, selected.Number)
+			// The poll is the authority on state; URCs only make the browser
+			// react sooner. Publishing here keeps a client that missed a URC,
+			// or connected mid-call, from showing the wrong thing.
+			a.publishEvent(callEvent{Type: "state", State: selected.State, Number: selected.Number})
 		}
 		a.activeCall.UpdatedAt = now
 		if selected.Number != "" {

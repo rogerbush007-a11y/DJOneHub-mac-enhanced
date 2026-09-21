@@ -1075,6 +1075,36 @@ func logAudioRouterState(r *audioRouter) {
 func (a *app) registerPlatformAudioRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/calls/audio/source", a.audioSourceAPI)
 	mux.HandleFunc("GET /api/calls/audio/source", a.audioSourceAPI)
+	mux.HandleFunc("GET /api/ringtone", a.ringtoneAPI)
+}
+
+// ringtoneCandidates are Windows' own notification sounds, most preferred
+// first. chord.wav is the one Windows calls "和弦"; the others only matter on
+// an install where it is missing.
+var ringtoneCandidates = []string{"chord.wav", "Ring01.wav", "notify.wav"}
+
+// ringtoneAPI serves the incoming-call sound from Windows' own media folder.
+//
+// The file is read from disk rather than embedded: it belongs to Windows, and
+// shipping a copy inside the binary would redistribute it. That also means the
+// browser gets whatever the running system actually has.
+func (a *app) ringtoneAPI(w http.ResponseWriter, r *http.Request) {
+	media := filepath.Join(os.Getenv("SystemRoot"), "Media")
+	if media == "Media" {
+		media = `C:\Windows\Media`
+	}
+	for _, name := range ringtoneCandidates {
+		path := filepath.Join(media, name)
+		info, err := os.Stat(path)
+		if err != nil || info.IsDir() {
+			continue
+		}
+		w.Header().Set("Content-Type", "audio/wav")
+		w.Header().Set("Cache-Control", "public, max-age=86400")
+		http.ServeFile(w, r, path)
+		return
+	}
+	writeError(w, http.StatusNotFound, "系统中未找到可用的提示音")
 }
 
 // audioSourceAPI selects what the remote party hears: this machine's

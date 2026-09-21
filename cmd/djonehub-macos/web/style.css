@@ -415,25 +415,58 @@ pre { min-height: 220px; margin: 12px 0 0; padding: 14px; overflow: auto; border
   .item { grid-template-columns: 1fr; gap: 6px; }
 }
 
+/* ---------- 通话面板 ---------- */
+
 /* A display rule on the element itself outranks the user-agent [hidden]
-   declaration, so these have to opt back out explicitly. */
+   declaration, so anything laid out here has to opt back out explicitly. */
 .dtmf-row[hidden],
-#call-audio-source-row[hidden] {
+#call-audio-source-row[hidden],
+.call-actions button[hidden] {
   display: none;
+}
+
+/* The dial panel is two columns: everything but the keypad stacks on the left,
+   which used to sit empty next to it. */
+/* The keypad is the tallest thing in the row; letting the left column match it
+   lets the audio card sit at the bottom instead of leaving a gap under it. */
+.dial-panel {
+  align-items: stretch;
+}
+
+.dial-main {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
 }
 
 .dtmf-row {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-top: 8px;
   font-size: 12px;
-  opacity: 0.75;
+  color: var(--text-muted);
 }
 
 .dtmf-row strong {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   letter-spacing: 2px;
+  color: var(--text-strong);
+}
+
+.audio-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: auto;
+  padding: 12px 14px;
+  border: 1px solid var(--border-soft);
+  border-radius: 10px;
+  background: var(--surface-muted);
+}
+
+.audio-card .audio-row {
+  margin-top: 0;
 }
 
 #call-audio-source-row select {
@@ -441,5 +474,43 @@ pre { min-height: 220px; margin: 12px 0 0; padding: 14px; overflow: auto; border
 }
 
 #call-audio-gain {
-  flex: 0 1 140px;
+  flex: 0 1 130px;
+}
+
+/* An incoming call has to be obvious from across the room, so it gets the
+   accent colour, a larger number and a slow pulse until it is answered. */
+.active-call.ringing {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft, rgba(10, 132, 255, .18));
+  animation: call-pulse 1.6s ease-in-out infinite;
+}
+
+.active-call.ringing #active-call-number {
+  font-size: 20px;
+  letter-spacing: 0.01em;
+}
+
+.active-call.ringing #active-call-label {
+  color: var(--accent);
+  font-weight: 650;
+}
+
+.active-call.ringing .call-actions button {
+  min-height: 40px;
+  padding: 0 22px;
+  font-size: 14px;
+}
+
+@keyframes call-pulse {
+  0%, 100% { box-shadow: 0 0 0 3px rgba(10, 132, 255, .18); }
+  50%      { box-shadow: 0 0 0 7px rgba(10, 132, 255, .06); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .active-call.ringing { animation: none; }
+}
+
+@media (max-width: 820px) {
+  .dial-panel { grid-template-columns: minmax(0, 1fr); }
+  .dial-pad { max-width: 252px; }
 }
