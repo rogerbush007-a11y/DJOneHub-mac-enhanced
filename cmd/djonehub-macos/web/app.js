@@ -570,11 +570,18 @@ async function loadCalls() {
           active.direction === "incoming" &&
           ["incoming", "waiting"].includes(active.state)) {
         notice(`来电：${active.number || "未知号码"}`);
+        startRinging(active.number);
       }
       lastActiveCallID = active.id;
+      // DTMF is only meaningful once the far end can hear it.
+      setDTMFMode(["active", "held"].includes(active.state));
+      if (ringing) startRinging(active.number);
+      else if (!ringingStates.includes(active.state)) stopRinging();
     } else {
       panel.hidden = true;
       lastActiveCallID = null;
+      setDTMFMode(false);
+      stopRinging();
     }
     const audio = status.audio || {};
     $("#call-audio-status").textContent = audio.running
@@ -587,6 +594,11 @@ async function loadCalls() {
       : "";
     if (audio.error) {
       $("#call-audio-status").textContent += `（${audio.error}）`;
+    }
+    const source = audio.devices?.near_source;
+    if (source && $("#call-audio-source").value !== source) {
+      $("#call-audio-source").value = source;
+      applySourceVisibility(source);
     }
     renderCallHistory(status.history);
   } catch (error) {
@@ -1306,11 +1318,145 @@ document.querySelectorAll(".sidebar-item, .tab").forEach((tab) => {
   });
 });
 
+// ---------- 实时来电 ----------
+//
+// The call poll runs every few seconds, which is far too slow to ring a phone.
+// The module announces RING and +CLIP the instant they happen and the backend
+// forwards them over /api/events, so the browser reacts immediately and the
+// poll is left to keep the displayed state honest.
+
+const ringingStates = ["incoming", "waiting"];
+let ringing = false;
+let lastIncomingNumber = "";
+let audioPrimed = false;
+
+// Browsers refuse to start audio a page has not been touched for, so the first
+// interaction quietly unlocks the element and asks about notifications.
+function primeAlerts() {
+  if (audioPrimed) return;
+  audioPrimed = true;
+  const el = $("#ringtone");
+  if (!el.getAttribute("src")) el.src = "/api/ringtone";
+  el.volume = 0.7;
+  el.play().then(() => {
+    el.pause();
+    el.currentTime = 0;
+  }).catch(() => {
+    // Nothing to do: playback stays blocked until a real interaction lands.
+  });
+  if ("Notification" in window && Notification.permission === "default") {
+    Notification.requestPermission().catch(() => {});
+  }
+}
+document.addEventListener("pointerdown", primeAlerts, { once: true });
+document.addEventListener("keydown", primeAlerts, { once: true });
+
+function startRinging(number) {
+  if (number) lastIncomingNumber = number;
+  const panel = $("#active-call");
+  panel.classList.add("ringing");
+  if (ringing) return;
+  ringing = true;
+
+  const el = $("#ringtone");
+  if (!el.getAttribute("src")) el.src = "/api/ringtone";
+  el.currentTime = 0;
+  el.play().catch(() => {
+    // The page has not been interacted with yet; the banner still shows.
+  });
+
+  if ("Notification" in window && Notification.permission === "granted") {
+    try {
+      new Notification("来电", {
+        body: lastIncomingNumber || "未知号码",
+        tag: "djonehub-incoming-call",
+        renotify: true,
+      });
+    } catch {
+      // Notification support varies; the banner and ringtone are enough.
+    }
+  }
+}
+
+function stopRinging() {
+  $("#active-call").classList.remove("ringing");
+  if (!ringing) return;
+  ringing = false;
+  const el = $("#ringtone");
+  el.pause();
+  el.currentTime = 0;
+}
+
+function handleCallEvent(event) {
+  switch (event.type) {
+    case "ring":
+      startRinging(lastIncomingNumber);
+      void loadCalls();
+      break;
+    case "caller":
+      lastIncomingNumber = event.number || "";
+      startRinging(event.number);
+      notice(`来电：${event.number || "未知号码"}`);
+      void loadCalls();
+      break;
+    case "connected":
+    case "ended":
+      stopRinging();
+      void loadCalls();
+      break;
+    case "state":
+      if (ringingStates.includes(event.state)) startRinging(event.number);
+      else stopRinging();
+      break;
+  }
+}
+
+function connectCallEvents() {
+  if (!("EventSource" in window)) return;
+  const stream = new EventSource("/api/events");
+  stream.onmessage = (message) => {
+    let event;
+    try {
+      event = JSON.parse(message.data);
+    } catch {
+      return;
+    }
+    handleCallEvent(event);
+  };
+  // EventSource reconnects on its own; nothing to do but stay quiet about it.
+  stream.onerror = () => {};
+}
+
+// While a call is up the keypad addresses the far end rather than the dial
+// field: that is what IVR menus need, and editing a number mid-call is not.
+let dtmfMode = false;
+
+function setDTMFMode(on) {
+  if (dtmfMode === on) return;
+  dtmfMode = on;
+  $("#dtmf-row").hidden = !on;
+  if (!on) $("#dtmf-sent").textContent = "";
+}
+
+async function sendDTMF(digit) {
+  try {
+    await api("/api/calls/dtmf", { method: "POST", body: JSON.stringify({ digit }) });
+    const sent = $("#dtmf-sent");
+    sent.textContent = (sent.textContent + digit).slice(-24);
+  } catch (error) {
+    notice(`按键发送失败：${error.message}`);
+  }
+}
+
 $("#dial-pad").addEventListener("click", (event) => {
   const key = event.target.closest(".dial-key");
   if (!key) return;
   const input = $("#dial-number");
   const action = key.dataset.action;
+  if (dtmfMode && key.dataset.key) {
+    void sendDTMF(key.dataset.key);
+    return;
+  }
   if (action === "backspace") {
     input.value = input.value.slice(0, -1);
   } else if (action === "clear") {
@@ -1450,6 +1596,7 @@ $("#check-4g-route").addEventListener("click", () =>
 $("#check-proxy-route").addEventListener("click", () =>
   runNetworkCheck("代理", "/api/network/check-proxy", $("#check-proxy-route")));
 $("#reject-call").addEventListener("click", async () => {
+  stopRinging();
   const button = $("#reject-call");
   button.disabled = true;
   try {
@@ -1463,6 +1610,7 @@ $("#reject-call").addEventListener("click", async () => {
   }
 });
 $("#answer-call").addEventListener("click", async () => {
+  stopRinging();
   const button = $("#answer-call");
   button.disabled = true;
   try {
@@ -1476,6 +1624,7 @@ $("#answer-call").addEventListener("click", async () => {
   }
 });
 $("#hangup-call").addEventListener("click", async () => {
+  stopRinging();
   const button = $("#hangup-call");
   button.disabled = true;
   try {
@@ -1521,6 +1670,49 @@ $("#call-audio-toggle").addEventListener("click", async () => {
     button.disabled = false;
   }
 });
+// The uplink source is a Windows-only capability; the endpoint does not exist
+// elsewhere, so the control only appears once the backend answers for it.
+function applySourceVisibility(source) {
+  const usesSystem = source === "system" || source === "mix";
+  for (const id of ["#call-audio-gain-label", "#call-audio-gain", "#call-audio-gain-value"]) {
+    $(id).hidden = !usesSystem;
+  }
+}
+
+async function pushAudioSource() {
+  const source = $("#call-audio-source").value;
+  const gain = Number($("#call-audio-gain").value) || 1;
+  applySourceVisibility(source);
+  $("#call-audio-gain-value").textContent = `${gain}×`;
+  try {
+    await api("/api/calls/audio/source", {
+      method: "POST",
+      body: JSON.stringify({ source, gain }),
+    });
+  } catch (error) {
+    notice(`音频来源切换失败：${error.message}`);
+  }
+}
+
+async function loadAudioSource() {
+  try {
+    const current = await api("/api/calls/audio/source");
+    $("#call-audio-source-row").hidden = false;
+    $("#call-audio-source").value = current.source || "mic";
+    $("#call-audio-gain").value = Math.round(current.gain || 1);
+    $("#call-audio-gain-value").textContent = `${Math.round(current.gain || 1)}×`;
+    applySourceVisibility(current.source || "mic");
+  } catch {
+    // Not supported on this platform: leave the control hidden.
+  }
+}
+
+$("#call-audio-source").addEventListener("change", () => void pushAudioSource());
+$("#call-audio-gain").addEventListener("change", () => void pushAudioSource());
+$("#call-audio-gain").addEventListener("input", () => {
+  $("#call-audio-gain-value").textContent = `${$("#call-audio-gain").value}×`;
+});
+
 $("#call-audio-mute").addEventListener("click", async () => {
   const button = $("#call-audio-mute");
   const muted = button.textContent === "取消静音";
@@ -1540,6 +1732,8 @@ $("#call-audio-mute").addEventListener("click", async () => {
 });
 
 loadPlatform();
+connectCallEvents();
+loadAudioSource();
 loadStatus();
 loadSMS();
 loadCalls();

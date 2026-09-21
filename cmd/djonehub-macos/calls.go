@@ -187,6 +187,9 @@ func (a *app) applyCallPoll(calls []parsedCall, now time.Time) {
 			log.Printf("voice audio routing stopped")
 		}
 		if callEnded {
+			a.publishEvent(callEvent{Type: "ended"})
+		}
+		if callEnded {
 			go func() {
 				time.Sleep(1500 * time.Millisecond)
 				a.stopModuleVoiceRoute()
@@ -217,6 +220,10 @@ func (a *app) applyCallPoll(calls []parsedCall, now time.Time) {
 		a.activeCall.State = selected.State
 		if prevState != selected.State {
 			log.Printf("call state %q -> %q (number=%q)", prevState, selected.State, selected.Number)
+			// The poll is the authority on state; URCs only make the browser
+			// react sooner. Publishing here keeps a client that missed a URC,
+			// or connected mid-call, from showing the wrong thing.
+			a.publishEvent(callEvent{Type: "state", State: selected.State, Number: selected.Number})
 		}
 		a.activeCall.UpdatedAt = now
 		if selected.Number != "" {
@@ -387,6 +394,12 @@ func (a *app) answerCall(w http.ResponseWriter, _ *http.Request) {
 	a.lastAnswerAt = time.Now()
 	a.callMu.Unlock()
 
+	// Same ordering constraint as dialling: the route has to exist before the
+	// call does.
+	if err := a.ensureModuleVoiceRouteBudgeted(6 * time.Second); err != nil {
+		log.Printf("module voice route not ready before answer: %v", err)
+	}
+
 	response, err := a.runATCommand("ATA", 5*time.Second)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err.Error())
@@ -474,6 +487,15 @@ func (a *app) dialCall(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]bool{"dialing": true})
 		return
 	}
+	// Arm the module-side voice route before the call exists. Quectel's Voice
+	// over USB refuses AT+QPCMV while a call is active, so preparing the route
+	// only once CLCC reports "active" is too late — the module never starts
+	// streaming and the call is silent in both directions. A failure here is
+	// logged rather than fatal: call control still works without audio.
+	if err := a.ensureModuleVoiceRouteBudgeted(6 * time.Second); err != nil {
+		log.Printf("module voice route not ready before dial: %v", err)
+	}
+
 	response, err := a.runATCommand("ATD"+number+";", 8*time.Second)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err.Error())

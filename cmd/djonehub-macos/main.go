@@ -78,6 +78,7 @@ type modulePhonebookEntry struct {
 }
 
 type app struct {
+	events            *eventHub
 	modem             *modem.Manager
 	esimMu            sync.RWMutex
 	esim              *esim.Manager
@@ -328,6 +329,7 @@ func main() {
 				callPollInterval: 3 * time.Second,
 				audio:            newAudioRouter(),
 				webConsole:       webConsole,
+				events:           newEventHub(),
 			}
 			if usbDevice != nil {
 				log.Printf("DJI USB device detected without AT serial port: %s %s (%s:%s)",
@@ -388,8 +390,10 @@ func main() {
 		callPollInterval: 3 * time.Second,
 		audio:            newAudioRouter(),
 		webConsole:       webConsole,
+		events:           newEventHub(),
 	}
 	manager.SetSMSCallback(instance.recordSMS)
+	instance.wireCallURCs()
 	if err := manager.Start(); err != nil {
 		log.Fatalf("open modem on %s: %v", port, err)
 	}
@@ -1088,6 +1092,7 @@ func (a *app) routes() http.Handler {
 	mux.HandleFunc("POST /api/sms/send", a.sendSMS)
 	mux.HandleFunc("POST /api/sms/refresh", a.refreshSMS)
 	mux.HandleFunc("POST /api/sms/clear-module", a.clearModuleSMS)
+	mux.HandleFunc("GET /api/events", a.eventsAPI)
 	mux.HandleFunc("GET /api/calls/status", a.callStatus)
 	mux.HandleFunc("POST /api/calls/reject", a.rejectCall)
 	mux.HandleFunc("POST /api/calls/answer", a.answerCall)
@@ -1098,6 +1103,7 @@ func (a *app) routes() http.Handler {
 	mux.HandleFunc("POST /api/calls/audio/stop", a.audioStop)
 	mux.HandleFunc("POST /api/calls/audio/mute", a.audioMute)
 	mux.HandleFunc("POST /api/calls/audio/record", a.audioRecord)
+	a.registerPlatformAudioRoutes(mux)
 	mux.HandleFunc("POST /api/calls/audio/host/register", a.audioHostRegister)
 	mux.HandleFunc("GET /api/calls/audio/host/config", a.audioHostConfig)
 	mux.HandleFunc("GET /api/voice/status", a.voiceStatusAPI)
