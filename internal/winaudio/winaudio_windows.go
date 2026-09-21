@@ -40,6 +40,7 @@ const (
 	stgmRead                 = 0x0
 	shareModeShared          = 0
 	streamFlagsEventCallback = 0x00040000
+	streamFlagsLoopback      = 0x00020000
 
 	waveFormatIEEEFloat     = 3
 	waveFormatExtensibleTag = 0xFFFE
@@ -384,15 +385,16 @@ func openDevice(id string) (*comObject, error) {
 }
 
 type stream struct {
-	device  *comObject
-	client  *comObject
-	service *comObject
-	event   windows.Handle
-	format  Format
-	frame   int // bytes per frame
-	bufFrm  uint32
-	started bool
-	mu      sync.Mutex
+	loopback bool
+	device   *comObject
+	client   *comObject
+	service  *comObject
+	event    windows.Handle
+	format   Format
+	frame    int // bytes per frame
+	bufFrm   uint32
+	started  bool
+	mu       sync.Mutex
 }
 
 func (s *stream) closeLocked() {
@@ -444,12 +446,17 @@ func mixFormat(client *comObject) (*waveFormatEx, error) {
 	return wf, nil
 }
 
-func initClient(client *comObject, wf *waveFormatEx, bufferMillis int, event windows.Handle) error {
+func initClient(client *comObject, wf *waveFormatEx, bufferMillis int, event windows.Handle, loopback bool) error {
 	duration := int64(bufferMillis) * refTimesPerMilli
+	flags := uintptr(streamFlagsEventCallback)
+	if loopback {
+		// A loopback client never signals its event, so it must poll instead.
+		flags = streamFlagsLoopback
+	}
 	// IAudioClient::Initialize
 	if err := hr(client.call(3,
 		shareModeShared,
-		uintptr(streamFlagsEventCallback),
+		flags,
 		uintptr(duration),
 		0,
 		uintptr(unsafe.Pointer(wf)),
@@ -457,13 +464,16 @@ func initClient(client *comObject, wf *waveFormatEx, bufferMillis int, event win
 	), "IAudioClient::Initialize"); err != nil {
 		return err
 	}
+	if loopback {
+		return nil
+	}
 	// IAudioClient::SetEventHandle
 	return hr(client.call(13, uintptr(event)), "SetEventHandle")
 }
 
 // prepare fills s in place. A stream carries a mutex, so it is never copied
 // by value after construction.
-func prepare(s *stream, dev Device, bufferMillis int) error {
+func prepare(s *stream, dev Device, bufferMillis int, loopback bool) error {
 	device, err := openDevice(dev.ID)
 	if err != nil {
 		return err
@@ -487,7 +497,7 @@ func prepare(s *stream, dev Device, bufferMillis int) error {
 		device.release()
 		return err
 	}
-	if err := initClient(client, wf, bufferMillis, event); err != nil {
+	if err := initClient(client, wf, bufferMillis, event, loopback); err != nil {
 		windows.CloseHandle(event)
 		client.release()
 		device.release()
@@ -497,6 +507,7 @@ func prepare(s *stream, dev Device, bufferMillis int) error {
 	s.device = device
 	s.client = client
 	s.event = event
+	s.loopback = loopback
 	s.format = formatFromWave(wf)
 	s.frame = s.format.blockAlign()
 	// IAudioClient::GetBufferSize
@@ -529,7 +540,26 @@ type CaptureStream struct{ stream }
 // format. bufferMillis sizes the engine buffer.
 func OpenCapture(dev Device, bufferMillis int) (*CaptureStream, error) {
 	c := &CaptureStream{}
-	if err := prepare(&c.stream, dev, bufferMillis); err != nil {
+	if err := prepare(&c.stream, dev, bufferMillis, false); err != nil {
+		return nil, err
+	}
+	if err := c.bindService(&iidIAudioCaptureClient, "GetService(IAudioCaptureClient)"); err != nil {
+		return nil, err
+	}
+	return c, nil
+}
+
+// OpenLoopback captures what a render endpoint is playing, so the machine's
+// own output can be used as an audio source. dev must be a Render device; the
+// stream it returns reads like any other capture stream, except that it
+// produces nothing at all while the endpoint is idle rather than silence, so
+// callers must not use it as a clock.
+func OpenLoopback(dev Device, bufferMillis int) (*CaptureStream, error) {
+	if dev.Flow != Render {
+		return nil, errors.New("loopback capture requires a render endpoint")
+	}
+	c := &CaptureStream{}
+	if err := prepare(&c.stream, dev, bufferMillis, true); err != nil {
 		return nil, err
 	}
 	if err := c.bindService(&iidIAudioCaptureClient, "GetService(IAudioCaptureClient)"); err != nil {
@@ -547,7 +577,7 @@ func (c *CaptureStream) Read(dst []float32, waitMillis uint32) ([]float32, int, 
 	if c.service == nil {
 		return dst, 0, errors.New("capture stream closed")
 	}
-	if waitMillis > 0 {
+	if waitMillis > 0 && !c.loopback {
 		windows.WaitForSingleObject(c.event, waitMillis)
 	}
 
@@ -602,7 +632,7 @@ type RenderStream struct{ stream }
 // OpenRender starts a shared-mode render stream using the endpoint's mix format.
 func OpenRender(dev Device, bufferMillis int) (*RenderStream, error) {
 	r := &RenderStream{}
-	if err := prepare(&r.stream, dev, bufferMillis); err != nil {
+	if err := prepare(&r.stream, dev, bufferMillis, false); err != nil {
 		return nil, err
 	}
 	if err := r.bindService(&iidIAudioRenderClient, "GetService(IAudioRenderClient)"); err != nil {

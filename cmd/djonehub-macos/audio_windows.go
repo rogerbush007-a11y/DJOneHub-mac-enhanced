@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -44,6 +45,10 @@ type audioRouter struct {
 	wg        sync.WaitGroup
 
 	muted atomic.Bool
+	// nearSrc selects what the remote party hears; see nearSource.
+	nearSrc atomic.Int32
+	// nearGain scales the system-audio contribution; see setNearGain.
+	nearGain atomicFloat
 
 	farPeak     atomicFloat
 	nearPeak    atomicFloat
@@ -77,6 +82,44 @@ const (
 	modulePCMChannels = 1
 )
 
+// nearSource selects what is sent up to the remote party.
+//
+// The microphone is always opened even when it is not the source: a loopback
+// client produces no packets at all while its endpoint is idle, so it cannot
+// pace the uplink, whereas a capture client always does. The microphone is
+// therefore the clock and the source only decides what gets mixed into each
+// frame it delivers.
+type nearSource int32
+
+const (
+	nearSourceMic nearSource = iota
+	nearSourceSystem
+	nearSourceMix
+)
+
+func parseNearSource(name string) (nearSource, bool) {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "mic", "microphone", "":
+		return nearSourceMic, true
+	case "system", "loopback":
+		return nearSourceSystem, true
+	case "mix", "both":
+		return nearSourceMix, true
+	}
+	return nearSourceMic, false
+}
+
+func (s nearSource) String() string {
+	switch s {
+	case nearSourceSystem:
+		return "system"
+	case nearSourceMix:
+		return "mix"
+	default:
+		return "mic"
+	}
+}
+
 // farLatencyBudget caps how much decoded downlink may wait for the speakers.
 //
 // The module starts streaming when the route is armed, which is before the call
@@ -107,10 +150,12 @@ func (a *atomicFloat) max(v float64) {
 }
 
 func newAudioRouter() *audioRouter {
-	return &audioRouter{
+	r := &audioRouter{
 		devNames: map[string]string{"mod_in": "", "mod_out": "", "mac_in": "", "mac_out": ""},
 		nearTap:  newSampleRing(modulePCMRate * 4),
 	}
+	r.nearGain.set(1)
+	return r
 }
 
 // moduleEndpointHints is only consulted when an endpoint's topology cannot be
@@ -220,7 +265,7 @@ func (r *audioRouter) start() error {
 	ready := make(chan error, 2)
 	r.wg.Add(2)
 	go r.pumpFar(macOut, stop, ready)
-	go r.pumpNear(macIn, stop, ready)
+	go r.pumpNear(macIn, macOut, stop, ready)
 
 	// Both directions must come up; otherwise the call is half-duplex and the
 	// user gets silence in one ear with no explanation.
@@ -281,6 +326,23 @@ func (r *audioRouter) stop() {
 
 func (r *audioRouter) setMuted(muted bool) { r.muted.Store(muted) }
 
+func (r *audioRouter) nearSource() nearSource { return nearSource(r.nearSrc.Load()) }
+
+func (r *audioRouter) setNearSource(s nearSource) { r.nearSrc.Store(int32(s)) }
+
+// setNearGain scales system audio on its way to the remote party. A loopback
+// stream is captured after the endpoint's volume has been applied, so a machine
+// playing quietly sends a correspondingly quiet signal; the gain compensates
+// without touching what the user actually hears.
+func (r *audioRouter) setNearGain(g float64) {
+	if g < 0 {
+		g = 0
+	} else if g > 32 {
+		g = 32
+	}
+	r.nearGain.set(g)
+}
+
 func (r *audioRouter) isRunning() bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -308,10 +370,11 @@ func (r *audioRouter) audioStats() map[string]int64 {
 func (r *audioRouter) audioDevices() map[string]string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	out := make(map[string]string, len(r.devNames))
+	out := make(map[string]string, len(r.devNames)+1)
 	for k, v := range r.devNames {
 		out[k] = v
 	}
+	out["near_source"] = r.nearSource().String()
 	return out
 }
 
@@ -450,8 +513,8 @@ func (r *audioRouter) pumpFar(macOut winaudio.Device, stop <-chan struct{}, read
 	}
 }
 
-// pumpNear moves our microphone into the module's uplink.
-func (r *audioRouter) pumpNear(macIn winaudio.Device, stop <-chan struct{}, ready chan<- error) {
+// pumpNear moves the selected uplink source into the module.
+func (r *audioRouter) pumpNear(macIn, macOut winaudio.Device, stop <-chan struct{}, ready chan<- error) {
 	defer r.wg.Done()
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
@@ -466,10 +529,27 @@ func (r *audioRouter) pumpNear(macIn winaudio.Device, stop <-chan struct{}, read
 
 	inFmt := capture.Format()
 	r.noteFormat(fmt.Sprintf("mac_in=%s mod_out=%dHz/1ch/int16", inFmt, modulePCMRate))
+
+	// Opened up front and kept regardless of the current source so switching
+	// is instant. Losing it is not fatal: the microphone still works, only the
+	// system-audio sources become unavailable.
+	var loopback *winaudio.CaptureStream
+	var loopConv *converter
+	loopRing := newSampleRing(modulePCMRate)
+	if lb, err := winaudio.OpenLoopback(macOut, 60); err != nil {
+		log.Printf("audio: system-audio capture unavailable: %v", err)
+	} else {
+		loopback = lb
+		lf := lb.Format()
+		loopConv = newConverter(lf.SampleRate, lf.Channels, modulePCMRate, modulePCMChannels)
+		r.noteFormat("loopback=" + lf.String())
+		defer loopback.Close()
+	}
 	ready <- nil
 
 	conv := newConverter(inFmt.SampleRate, inFmt.Channels, modulePCMRate, modulePCMChannels)
 	var in []float32
+	var loopIn []float32
 
 	for {
 		select {
@@ -489,17 +569,43 @@ func (r *audioRouter) pumpNear(macIn winaudio.Device, stop <-chan struct{}, read
 		}
 		r.macInCalls.Add(1)
 
+		// Drain whatever the machine has played since the last pass. A loopback
+		// endpoint delivers nothing while idle, so this simply adds no samples.
+		if loopback != nil {
+			lb, lbFrames, err := loopback.Read(loopIn[:0], 0)
+			loopIn = lb
+			if err == nil && lbFrames > 0 {
+				loopRing.push(loopConv.convert(loopConv.toMono(lb)))
+			}
+		}
+
 		mono := conv.toMono(buf)
 		if r.muted.Load() {
 			for i := range mono {
 				mono[i] = 0
 			}
 		}
-		peak, rms := levels(mono)
+		out := conv.convert(mono)
+
+		// The microphone paces the uplink; system audio is aligned to the frame
+		// count it just produced, zero-padded when the machine is quiet.
+		if src := r.nearSource(); src != nearSourceMic && loopback != nil {
+			system := loopRing.take(len(out))
+			gain := float32(r.nearGain.get())
+			if src == nearSourceSystem {
+				for i := range out {
+					out[i] = clampUnit(system[i] * gain)
+				}
+			} else {
+				for i := range out {
+					out[i] = clampUnit(out[i] + system[i]*gain)
+				}
+			}
+		}
+
+		peak, rms := levels(out)
 		r.nearPeak.max(peak)
 		r.nearLive.set(rms)
-
-		out := conv.convert(mono)
 		if len(out) == 0 {
 			continue
 		}
@@ -931,4 +1037,51 @@ func logAudioRouterState(r *audioRouter) {
 	d := r.audioDevices()
 	log.Printf("audio router: running=%v far_peak=%.3f near_peak=%.3f mod=%q mac_out=%q err=%q",
 		running, far, near, d["mod_in"], d["mac_out"], errText)
+}
+
+// registerPlatformAudioRoutes exposes the Windows-only uplink source control.
+// The other platforms route only the microphone, so this is a no-op there.
+func (a *app) registerPlatformAudioRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("POST /api/calls/audio/source", a.audioSourceAPI)
+	mux.HandleFunc("GET /api/calls/audio/source", a.audioSourceAPI)
+}
+
+// audioSourceAPI selects what the remote party hears: this machine's
+// microphone (the default), whatever it is playing, or both.
+//
+// Note that "system" and "mix" capture the same endpoint the call is played
+// to, so if the call and the system audio share one output device the remote
+// party will hear themselves. Sending the call to a separate device — for
+// example headphones — avoids that entirely.
+func (a *app) audioSourceAPI(w http.ResponseWriter, r *http.Request) {
+	if a.audio == nil {
+		writeError(w, http.StatusBadGateway, "通话音频不可用")
+		return
+	}
+	if r.Method == http.MethodGet {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"source": a.audio.nearSource().String(),
+			"gain":   a.audio.nearGain.get(),
+		})
+		return
+	}
+	var body struct {
+		Source string   `json:"source"`
+		Gain   *float64 `json:"gain"`
+	}
+	if !decodeJSON(w, r, &body) {
+		return
+	}
+	source, ok := parseNearSource(body.Source)
+	if !ok {
+		writeError(w, http.StatusBadRequest, "source 仅支持 mic / system / mix")
+		return
+	}
+	a.audio.setNearSource(source)
+	if body.Gain != nil {
+		a.audio.setNearGain(*body.Gain)
+	}
+	gain := a.audio.nearGain.get()
+	log.Printf("audio: uplink source set to %s (system gain %.1fx)", source, gain)
+	writeJSON(w, http.StatusOK, map[string]any{"source": source.String(), "gain": gain})
 }

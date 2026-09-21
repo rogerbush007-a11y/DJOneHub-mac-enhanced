@@ -26,6 +26,7 @@ import (
 func main() {
 	capture := flag.String("capture", "", "substring of a capture endpoint name to meter")
 	tone := flag.String("tone", "", "substring of a render endpoint name to play a 440 Hz tone to")
+	loop := flag.String("loopback", "", "substring of a RENDER endpoint name to capture what it is playing")
 	out := flag.String("out", "", "write the captured audio to this WAV file")
 	seconds := flag.Int("seconds", 10, "how long to run")
 	flag.Parse()
@@ -34,6 +35,8 @@ func main() {
 	winaudio.InitCOM()
 
 	switch {
+	case *loop != "":
+		meterLoopback(*loop, *seconds, *out)
 	case *capture != "":
 		meter(*capture, *seconds, *out)
 	case *tone != "":
@@ -65,6 +68,58 @@ func list() {
 		if def, err := winaudio.Default(spec.flow); err == nil {
 			fmt.Printf("  [default] %s\n", def.Name)
 		}
+	}
+}
+
+func meterLoopback(needle string, seconds int, outPath string) {
+	dev, err := find(winaudio.Render, needle)
+	if err != nil {
+		fmt.Println("error:", err)
+		os.Exit(1)
+	}
+	stream, err := winaudio.OpenLoopback(dev, 100)
+	if err != nil {
+		fmt.Printf("open loopback %q failed: %v\n", dev.Name, err)
+		os.Exit(1)
+	}
+	defer stream.Close()
+	fmt.Printf("loopback on %q  format=%s\n\n", dev.Name, stream.Format())
+
+	deadline := time.Now().Add(time.Duration(seconds) * time.Second)
+	scratch := make([]float32, 0, 16384)
+	total := 0
+	var sessionPeak float64
+	for time.Now().Before(deadline) {
+		buf, frames, err := stream.Read(scratch[:0], 0)
+		if err != nil {
+			fmt.Println("read error:", err)
+			break
+		}
+		if frames == 0 {
+			time.Sleep(10 * time.Millisecond)
+			continue
+		}
+		total += frames
+		var peak float64
+		for _, v := range buf {
+			if a := math.Abs(float64(v)); a > peak {
+				peak = a
+			}
+		}
+		if peak > sessionPeak {
+			sessionPeak = peak
+		}
+		fmt.Printf("%-7.1f frames=%-9d peak=%-9.5f %s\n",
+			time.Since(deadline.Add(-time.Duration(seconds)*time.Second)).Seconds(),
+			total, peak, strings.Repeat("#", int(peak*50)))
+	}
+	fmt.Printf("\ntotal frames=%d  session peak=%.5f\n", total, sessionPeak)
+	if total == 0 {
+		fmt.Println("verdict: loopback produced NO packets at all")
+	} else if sessionPeak < 1e-5 {
+		fmt.Println("verdict: packets arrived but all silent")
+	} else {
+		fmt.Println("verdict: loopback captured audio ✓")
 	}
 }
 

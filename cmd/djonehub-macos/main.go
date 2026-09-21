@@ -1098,6 +1098,7 @@ func (a *app) routes() http.Handler {
 	mux.HandleFunc("POST /api/calls/audio/stop", a.audioStop)
 	mux.HandleFunc("POST /api/calls/audio/mute", a.audioMute)
 	mux.HandleFunc("POST /api/calls/audio/record", a.audioRecord)
+	a.registerPlatformAudioRoutes(mux)
 	mux.HandleFunc("POST /api/calls/audio/host/register", a.audioHostRegister)
 	mux.HandleFunc("GET /api/calls/audio/host/config", a.audioHostConfig)
 	mux.HandleFunc("GET /api/voice/status", a.voiceStatusAPI)
