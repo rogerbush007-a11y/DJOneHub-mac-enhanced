@@ -128,3 +128,50 @@ func TestPCMStreamSplitsSampleAcrossReads(t *testing.T) {
 		t.Fatalf("odd-sized reads corrupted the stream: roughness %.3f", r)
 	}
 }
+
+// quietNoisePCM is the line noise that fills the gaps between spoken phrases:
+// low level and, being noise, equally rough at either sample alignment.
+func quietNoisePCM(samples int, amplitude int) []byte {
+	buf := make([]byte, samples*2)
+	state := uint32(0x12345678)
+	for i := 0; i < samples; i++ {
+		state = state*1664525 + 1013904223
+		v := int16(int32(state>>16)%int32(2*amplitude) - int32(amplitude))
+		binary.LittleEndian.PutUint16(buf[i*2:], uint16(v))
+	}
+	return buf
+}
+
+// TestPCMStreamIgnoresQuietNoise is the regression for a call that alternated
+// between clear audio and noise between runs. The phase was decided from the
+// first window that carried any level at all, and the gaps between IVR phrases
+// carry line noise at roughly -43 dBFS. Noise scores the same at both
+// alignments, so those windows picked a winner essentially at random and the
+// choice then held for the whole call.
+func TestPCMStreamIgnoresQuietNoise(t *testing.T) {
+	stream := newPCMStream()
+	if out := drain(t, stream, quietNoisePCM(8000, 300), 512); len(out) != 0 {
+		t.Fatalf("line noise must not be decoded before the phase is known, got %d samples", len(out))
+	}
+	if stream.phase != -1 {
+		t.Fatalf("line noise decided the phase (%d): scores %.2f / %.2f",
+			stream.phase, stream.score0, stream.score1)
+	}
+	// Real audio still locks the phase.
+	if out := drain(t, stream, speechLikePCM(8000), 512); len(out) == 0 {
+		t.Fatal("no samples once real audio arrived")
+	}
+	if stream.phase != 0 {
+		t.Fatalf("expected phase 0 on aligned audio, got %d", stream.phase)
+	}
+}
+
+// TestPCMStreamNeedsAClearWinner keeps the detector from acting on a window
+// where the two alignments score alike.
+func TestPCMStreamNeedsAClearWinner(t *testing.T) {
+	// Loud noise passes the level gate but says nothing about alignment.
+	phase, s0, s1 := choosePCMPhase(quietNoisePCM(4000, 12000))
+	if phase != -1 {
+		t.Fatalf("loud noise should not decide the phase, got %d (%.2f / %.2f)", phase, s0, s1)
+	}
+}
