@@ -572,9 +572,12 @@ async function loadCalls() {
         notice(`来电：${active.number || "未知号码"}`);
       }
       lastActiveCallID = active.id;
+      // DTMF is only meaningful once the far end can hear it.
+      setDTMFMode(["active", "held"].includes(active.state));
     } else {
       panel.hidden = true;
       lastActiveCallID = null;
+      setDTMFMode(false);
     }
     const audio = status.audio || {};
     $("#call-audio-status").textContent = audio.running
@@ -587,6 +590,11 @@ async function loadCalls() {
       : "";
     if (audio.error) {
       $("#call-audio-status").textContent += `（${audio.error}）`;
+    }
+    const source = audio.devices?.near_source;
+    if (source && $("#call-audio-source").value !== source) {
+      $("#call-audio-source").value = source;
+      applySourceVisibility(source);
     }
     renderCallHistory(status.history);
   } catch (error) {
@@ -1306,11 +1314,36 @@ document.querySelectorAll(".sidebar-item, .tab").forEach((tab) => {
   });
 });
 
+// While a call is up the keypad addresses the far end rather than the dial
+// field: that is what IVR menus need, and editing a number mid-call is not.
+let dtmfMode = false;
+
+function setDTMFMode(on) {
+  if (dtmfMode === on) return;
+  dtmfMode = on;
+  $("#dtmf-row").hidden = !on;
+  if (!on) $("#dtmf-sent").textContent = "";
+}
+
+async function sendDTMF(digit) {
+  try {
+    await api("/api/calls/dtmf", { method: "POST", body: JSON.stringify({ digit }) });
+    const sent = $("#dtmf-sent");
+    sent.textContent = (sent.textContent + digit).slice(-24);
+  } catch (error) {
+    notice(`按键发送失败：${error.message}`);
+  }
+}
+
 $("#dial-pad").addEventListener("click", (event) => {
   const key = event.target.closest(".dial-key");
   if (!key) return;
   const input = $("#dial-number");
   const action = key.dataset.action;
+  if (dtmfMode && key.dataset.key) {
+    void sendDTMF(key.dataset.key);
+    return;
+  }
   if (action === "backspace") {
     input.value = input.value.slice(0, -1);
   } else if (action === "clear") {
@@ -1521,6 +1554,49 @@ $("#call-audio-toggle").addEventListener("click", async () => {
     button.disabled = false;
   }
 });
+// The uplink source is a Windows-only capability; the endpoint does not exist
+// elsewhere, so the control only appears once the backend answers for it.
+function applySourceVisibility(source) {
+  const usesSystem = source === "system" || source === "mix";
+  for (const id of ["#call-audio-gain-label", "#call-audio-gain", "#call-audio-gain-value"]) {
+    $(id).hidden = !usesSystem;
+  }
+}
+
+async function pushAudioSource() {
+  const source = $("#call-audio-source").value;
+  const gain = Number($("#call-audio-gain").value) || 1;
+  applySourceVisibility(source);
+  $("#call-audio-gain-value").textContent = `${gain}×`;
+  try {
+    await api("/api/calls/audio/source", {
+      method: "POST",
+      body: JSON.stringify({ source, gain }),
+    });
+  } catch (error) {
+    notice(`音频来源切换失败：${error.message}`);
+  }
+}
+
+async function loadAudioSource() {
+  try {
+    const current = await api("/api/calls/audio/source");
+    $("#call-audio-source-row").hidden = false;
+    $("#call-audio-source").value = current.source || "mic";
+    $("#call-audio-gain").value = Math.round(current.gain || 1);
+    $("#call-audio-gain-value").textContent = `${Math.round(current.gain || 1)}×`;
+    applySourceVisibility(current.source || "mic");
+  } catch {
+    // Not supported on this platform: leave the control hidden.
+  }
+}
+
+$("#call-audio-source").addEventListener("change", () => void pushAudioSource());
+$("#call-audio-gain").addEventListener("change", () => void pushAudioSource());
+$("#call-audio-gain").addEventListener("input", () => {
+  $("#call-audio-gain-value").textContent = `${$("#call-audio-gain").value}×`;
+});
+
 $("#call-audio-mute").addEventListener("click", async () => {
   const button = $("#call-audio-mute");
   const muted = button.textContent === "取消静音";
@@ -1540,6 +1616,7 @@ $("#call-audio-mute").addEventListener("click", async () => {
 });
 
 loadPlatform();
+loadAudioSource();
 loadStatus();
 loadSMS();
 loadCalls();

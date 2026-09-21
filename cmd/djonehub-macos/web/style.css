@@ -414,3 +414,32 @@ pre { min-height: 220px; margin: 12px 0 0; padding: 14px; overflow: auto; border
   .toolbar { grid-template-columns: 1fr; }
   .item { grid-template-columns: 1fr; gap: 6px; }
 }
+
+/* A display rule on the element itself outranks the user-agent [hidden]
+   declaration, so these have to opt back out explicitly. */
+.dtmf-row[hidden],
+#call-audio-source-row[hidden] {
+  display: none;
+}
+
+.dtmf-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  font-size: 12px;
+  opacity: 0.75;
+}
+
+.dtmf-row strong {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  letter-spacing: 2px;
+}
+
+#call-audio-source-row select {
+  min-width: 11em;
+}
+
+#call-audio-gain {
+  flex: 0 1 140px;
+}
