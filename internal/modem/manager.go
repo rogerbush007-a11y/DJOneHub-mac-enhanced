@@ -248,6 +248,11 @@ func (m *Manager) forceReleasePort(portPath string) {
 			skipped = append(skipped, pid)
 			continue
 		}
+		// 系统服务（如 ModemManager）同时持有模块的其他端口，杀掉它会让整台机器断网。
+		if name := processName(pid); protectedPortHolders[name] {
+			logger.Warn(fmt.Sprintf("[%s] 端口被系统服务占用，不强制释放", m.cfg.ID), "port", portPath, "pid", pid, "process", name)
+			continue
+		}
 		if err := killProcess(pid); err == nil {
 			released = append(released, pid)
 		}
@@ -261,6 +266,26 @@ func (m *Manager) forceReleasePort(portPath string) {
 		// 等待进程完全退出
 		time.Sleep(200 * time.Millisecond)
 	}
+}
+
+// protectedPortHolders are system services that may hold a module port and must
+// never be killed to free it; the port has to be released through their own
+// configuration instead (for ModemManager, a udev ID_MM_PORT_IGNORE rule).
+var protectedPortHolders = map[string]bool{
+	"ModemManager":   true,
+	"NetworkManager": true,
+	"gpsd":           true,
+	"systemd":        true,
+	"pipewire":       true,
+	"wireplumber":    true,
+}
+
+func processName(pid int) string {
+	comm, err := os.ReadFile(fmt.Sprintf("/proc/%d/comm", pid))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(comm))
 }
 
 func parseFuserPIDs(raw string) []int {

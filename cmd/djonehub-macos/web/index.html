@@ -103,6 +103,7 @@
           <div><h2>通话</h2><p>接听、拨打与通话记录</p></div>
           <small id="call-monitor-status">正在连接模块</small>
         </div>
+        <audio id="ringtone" preload="auto" loop hidden></audio>
         <div id="active-call" class="active-call" hidden>
           <div>
             <span id="active-call-label">正在来电</span>
@@ -116,10 +117,35 @@
           </div>
         </div>
         <div class="dial-panel">
+          <div class="dial-main">
           <form id="dial-form" class="dial-form">
-            <input id="dial-number" type="tel" placeholder="输入或点击下方键盘拨号" autocomplete="tel" inputmode="tel">
+            <input id="dial-number" type="tel" placeholder="输入或点击右侧键盘拨号" autocomplete="tel" inputmode="tel">
             <button type="submit">呼叫</button>
           </form>
+          <div id="dtmf-row" class="dtmf-row" hidden>
+            <span>通话中：按键将作为 DTMF 发送给对方</span>
+            <strong id="dtmf-sent"></strong>
+          </div>
+          <div class="audio-card">
+            <div class="audio-row">
+              <span id="call-audio-status">通话音频：未运行</span>
+              <button id="call-audio-toggle" class="secondary" type="button">开启</button>
+              <button id="call-audio-mute" class="secondary" type="button" disabled>静音</button>
+              <small id="call-audio-levels"></small>
+            </div>
+            <div id="call-audio-source-row" class="audio-row" hidden>
+              <label for="call-audio-source">对方听到</label>
+              <select id="call-audio-source">
+                <option value="mic">麦克风</option>
+                <option value="system">电脑播放的声音</option>
+                <option value="mix">麦克风 + 电脑声音</option>
+              </select>
+              <label id="call-audio-gain-label" for="call-audio-gain" hidden>增益</label>
+              <input id="call-audio-gain" type="range" min="1" max="32" step="1" value="1" hidden>
+              <small id="call-audio-gain-value" hidden></small>
+            </div>
+          </div>
+          </div>
           <div id="dial-pad" class="dial-pad" aria-label="拨号键盘">
             <button type="button" class="dial-key" data-key="1">1</button>
             <button type="button" class="dial-key" data-key="2">2</button>
@@ -137,12 +163,6 @@
             <button type="button" class="dial-key dial-call" data-action="call" title="拨打">📞</button>
             <button type="button" class="dial-key dial-clear" data-action="clear" title="清空">×</button>
           </div>
-        </div>
-        <div class="audio-row">
-          <span id="call-audio-status">通话音频：未运行</span>
-          <button id="call-audio-toggle" class="secondary" type="button">开启</button>
-          <button id="call-audio-mute" class="secondary" type="button" disabled>静音</button>
-          <small id="call-audio-levels"></small>
         </div>
         <details class="call-history-panel">
           <summary><span>最近通话记录</span><small id="call-history-count">0 条</small></summary>

@@ -78,6 +78,7 @@ type modulePhonebookEntry struct {
 }
 
 type app struct {
+	events            *eventHub
 	modem             *modem.Manager
 	esimMu            sync.RWMutex
 	esim              *esim.Manager
@@ -111,6 +112,8 @@ type app struct {
 	callConfigured     bool
 	lastAnswerAt       time.Time
 	callNotifier       func(callRecord)
+	smsNotifier        func(receivedSMS)
+	callDeclined       func()
 	audio              *audioRouter
 	audioManualSet     bool
 	audioManualOn      bool
@@ -314,6 +317,11 @@ func main() {
 	if strings.TrimSpace(port) == "" {
 		var err error
 		port, err = discoverATPort()
+		if err != nil && runtime.GOOS == "linux" {
+			// There is no libusb fallback on Linux; exit so the service
+			// manager retries once the module has enumerated.
+			log.Fatalf("modem discovery failed: %v", err)
+		}
 		if err != nil {
 			usbDevice := discoverDJIUSBDevice()
 			usbATDevice, usbATErr := openDJIUSBAT()
@@ -328,6 +336,7 @@ func main() {
 				callPollInterval: 3 * time.Second,
 				audio:            newAudioRouter(),
 				webConsole:       webConsole,
+				events:           newEventHub(),
 			}
 			if usbDevice != nil {
 				log.Printf("DJI USB device detected without AT serial port: %s %s (%s:%s)",
@@ -388,8 +397,11 @@ func main() {
 		callPollInterval: 3 * time.Second,
 		audio:            newAudioRouter(),
 		webConsole:       webConsole,
+		events:           newEventHub(),
 	}
 	manager.SetSMSCallback(instance.recordSMS)
+	instance.wireCallURCs()
+	instance.startDesktopNotifier(listen)
 	if err := manager.Start(); err != nil {
 		log.Fatalf("open modem on %s: %v", port, err)
 	}
@@ -398,6 +410,7 @@ func main() {
 	if !manager.WaitReady(15 * time.Second) {
 		log.Printf("modem initialization is still running; the web UI will remain available")
 	}
+	startPlatformWatchdog(manager, port)
 
 	atBackend := backend.NewATBackend(manager)
 	esimManager, err := esim.NewManager(esim.ManagerOptions{
@@ -530,6 +543,12 @@ func newDemoApp() *app {
 }
 
 func discoverATPort() (string, error) {
+	if port, err := platformPreferredATPort(); err == nil {
+		if _, err := modem.ProbeIMEICached(port, 2*time.Second); err == nil {
+			return port, nil
+		}
+		log.Printf("preferred AT port %s did not answer, falling back to discovery", port)
+	}
 	ports, err := serial.GetPortsList()
 	if err != nil {
 		return "", fmt.Errorf("list serial ports: %w", err)
@@ -549,6 +568,9 @@ func discoverATPort() (string, error) {
 	if len(attempted) == 0 {
 		if runtime.GOOS == "windows" {
 			return "", errors.New("no Windows COM ports found; install the module serial driver or pass -port COMx explicitly")
+		}
+		if runtime.GOOS == "linux" {
+			return "", errors.New("no Quectel/DJI AT port found; check the udev rule and dialout access, or pass -port /dev/ttyUSBx explicitly")
 		}
 		return "", errors.New("no Quectel/DJI USB serial ports found; pass -port /dev/cu.* explicitly")
 	}
@@ -720,6 +742,16 @@ func (a *app) recordSMS(sender, content string, timestamp time.Time) {
 }
 
 func (a *app) mergeSMS(messages []receivedSMS) (newCount int, total int) {
+	newCount, total, fresh := a.mergeSMSCache(messages)
+	if a.smsNotifier != nil {
+		for _, item := range fresh {
+			a.smsNotifier(item)
+		}
+	}
+	return newCount, total
+}
+
+func (a *app) mergeSMSCache(messages []receivedSMS) (newCount int, total int, fresh []receivedSMS) {
 	a.smsMu.Lock()
 	defer a.smsMu.Unlock()
 	seen := make(map[string]bool, len(a.sms)+len(messages))
@@ -736,6 +768,7 @@ func (a *app) mergeSMS(messages []receivedSMS) (newCount int, total int) {
 		}
 		seen[key] = true
 		a.sms = append(a.sms, item)
+		fresh = append(fresh, item)
 		newCount++
 	}
 	sort.SliceStable(a.sms, func(i, j int) bool {
@@ -744,7 +777,7 @@ func (a *app) mergeSMS(messages []receivedSMS) (newCount int, total int) {
 	if len(a.sms) > 500 {
 		a.sms = a.sms[:500]
 	}
-	return newCount, len(a.sms)
+	return newCount, len(a.sms), fresh
 }
 
 func smsCacheKey(item receivedSMS) string {
@@ -1088,6 +1121,7 @@ func (a *app) routes() http.Handler {
 	mux.HandleFunc("POST /api/sms/send", a.sendSMS)
 	mux.HandleFunc("POST /api/sms/refresh", a.refreshSMS)
 	mux.HandleFunc("POST /api/sms/clear-module", a.clearModuleSMS)
+	mux.HandleFunc("GET /api/events", a.eventsAPI)
 	mux.HandleFunc("GET /api/calls/status", a.callStatus)
 	mux.HandleFunc("POST /api/calls/reject", a.rejectCall)
 	mux.HandleFunc("POST /api/calls/answer", a.answerCall)
@@ -1098,6 +1132,7 @@ func (a *app) routes() http.Handler {
 	mux.HandleFunc("POST /api/calls/audio/stop", a.audioStop)
 	mux.HandleFunc("POST /api/calls/audio/mute", a.audioMute)
 	mux.HandleFunc("POST /api/calls/audio/record", a.audioRecord)
+	a.registerPlatformAudioRoutes(mux)
 	mux.HandleFunc("POST /api/calls/audio/host/register", a.audioHostRegister)
 	mux.HandleFunc("GET /api/calls/audio/host/config", a.audioHostConfig)
 	mux.HandleFunc("GET /api/voice/status", a.voiceStatusAPI)
@@ -1132,7 +1167,7 @@ func (a *app) routes() http.Handler {
 	mux.HandleFunc("PATCH /api/esim/profile", a.renameESIMProfile)
 	mux.HandleFunc("DELETE /api/esim/profile", a.deleteESIMProfile)
 	mux.HandleFunc("POST /api/esim/download", a.downloadESIMProfile)
-	if runtime.GOOS == "windows" || a.webConsole {
+	if runtime.GOOS == "windows" || runtime.GOOS == "linux" || a.webConsole {
 		assets, err := fs.Sub(webAssets, "web")
 		if err != nil {
 			panic(fmt.Sprintf("open embedded web console: %v", err))
@@ -1154,8 +1189,8 @@ func (a *app) platformInfo(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"version":               appVersion,
 		"os":                    runtime.GOOS,
-		"web_console":           runtime.GOOS == "windows" || a.webConsole,
-		"call_audio":            runtime.GOOS == "darwin",
+		"web_console":           runtime.GOOS == "windows" || runtime.GOOS == "linux" || a.webConsole,
+		"call_audio":            runtime.GOOS == "darwin" || runtime.GOOS == "linux",
 		"direct_usb_at":         runtime.GOOS == "darwin",
 		"esim_full":             runtime.GOOS == "darwin",
 		"network_policy_native": runtime.GOOS == "darwin",

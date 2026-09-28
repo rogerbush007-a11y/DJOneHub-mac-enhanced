@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=DJOneHub
+Comment=4G 模块短信、VoLTE 通话与 eSIM 管理
+Exec=xdg-open http://127.0.0.1:7575
+Icon=phone
+Terminal=false
+Categories=Network;Telephony;
