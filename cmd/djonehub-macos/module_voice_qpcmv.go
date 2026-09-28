@@ -1,4 +1,4 @@
-//go:build windows
+//go:build windows || linux
 
 package main
 
@@ -12,9 +12,10 @@ import (
 	"time"
 )
 
-// On Windows the module-side voice route is Quectel's "Voice over USB": the
-// module decodes the call and streams raw 8 kHz PCM on its NMEA interface,
-// which audio_windows.go bridges to this machine's microphone and speakers.
+// On Windows and Linux the module-side voice route is Quectel's "Voice over
+// USB": the module decodes the call and streams raw 8 kHz PCM on its NMEA
+// interface, which audio_windows.go / audio_linux.go bridge to this machine's
+// microphone and speakers.
 // Unlike the macOS path there is nothing to install on the module — no ADB, no
 // kernel modules — so preparing the route is two AT commands.
 //
@@ -33,7 +34,7 @@ var gpsOutportSaved struct {
 }
 
 func (a *app) kickModuleVoice() {
-	log.Printf("module voice: Windows Voice over USB is armed when a call becomes active")
+	log.Printf("module voice: Voice over USB is armed when a call becomes active")
 }
 
 func (a *app) setVoiceStatus(ready bool, err error, detail string) {
@@ -189,7 +190,7 @@ func (a *app) voiceStatus() map[string]any {
 		"transport":         "voice-over-usb",
 		"runtime_included":  false,
 		"runtime_installed": false,
-		"runtime_detail":    "Windows 走 Quectel Voice over USB，不需要模块侧 ADB 运行时",
+		"runtime_detail":    "走 Quectel Voice over USB，不需要模块侧 ADB 运行时",
 	}
 	a.moduleVoiceMu.Unlock()
 
@@ -206,7 +207,7 @@ func (a *app) voiceStatusAPI(w http.ResponseWriter, _ *http.Request) {
 }
 
 // voiceProvisionAPI reports whether this module can carry call audio at all.
-// Nothing is installed on Windows, so "provisioning" is a capability probe.
+// Nothing is installed on the module, so "provisioning" is a capability probe.
 func (a *app) voiceProvisionAPI(w http.ResponseWriter, _ *http.Request) {
 	response, err := a.runATCommand("AT+QPCMV=?", 5*time.Second)
 	if err != nil {

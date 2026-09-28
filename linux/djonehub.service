@@ -1,0 +1,17 @@
+[Unit]
+Description=DJOneHub cellular SMS / VoLTE call console
+Documentation=file:///usr/local/share/doc/djonehub/README-Linux.md
+After=pipewire.service pipewire-pulse.service wireplumber.service
+Wants=pipewire.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/djonehub-linux -listen 127.0.0.1:7575
+Restart=on-failure
+RestartSec=10
+# Optional: route call audio to specific PipeWire nodes, e.g. an echo-cancel pair.
+# Environment=DJONEHUB_AUDIO_SINK=echo-cancel-sink
+# Environment=DJONEHUB_AUDIO_SOURCE=echo-cancel-source
+
+[Install]
+WantedBy=default.target

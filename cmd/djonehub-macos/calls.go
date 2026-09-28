@@ -362,12 +362,8 @@ func (a *app) rejectCall(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]bool{"rejected": true})
 		return
 	}
-	response, err := a.runATCommand("AT+CHUP", 5*time.Second)
+	response, err := a.rejectIncoming()
 	if err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
-		return
-	}
-	if err := validateCallATResponse(response); err != nil {
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
 	}
@@ -377,19 +373,47 @@ func (a *app) rejectCall(w http.ResponseWriter, _ *http.Request) {
 	})
 }
 
+// rejectIncoming declines the ringing call; shared with the desktop notifier.
+func (a *app) rejectIncoming() (string, error) {
+	response, err := a.runATCommand("AT+CHUP", 5*time.Second)
+	if err != nil {
+		return "", err
+	}
+	if err := validateCallATResponse(response); err != nil {
+		return "", err
+	}
+	if a.callDeclined != nil {
+		a.callDeclined()
+	}
+	return response, nil
+}
+
 func (a *app) answerCall(w http.ResponseWriter, _ *http.Request) {
 	if a.demo {
 		writeJSON(w, http.StatusOK, map[string]bool{"answered": true})
 		return
 	}
+	response, err := a.answerIncoming()
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"answered": true,
+		"response": response,
+	})
+}
+
+// answerIncoming answers the ringing call. It is shared by the HTTP API and
+// the desktop notification's answer button.
+func (a *app) answerIncoming() (string, error) {
 	// Debounce duplicate answer requests: the incoming-call popup and the main
 	// call screen can both fire ATA within a few hundred ms, and the second
 	// ATA returns ERROR and can disturb call setup.
 	a.callMu.Lock()
 	if time.Since(a.lastAnswerAt) < 2*time.Second {
 		a.callMu.Unlock()
-		writeJSON(w, http.StatusOK, map[string]bool{"answered": true})
-		return
+		return "", nil
 	}
 	a.lastAnswerAt = time.Now()
 	a.callMu.Unlock()
@@ -402,18 +426,13 @@ func (a *app) answerCall(w http.ResponseWriter, _ *http.Request) {
 
 	response, err := a.runATCommand("ATA", 5*time.Second)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
-		return
+		return "", err
 	}
 	if err := validateCallATResponse(response); err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
-		return
+		return "", err
 	}
 	log.Printf("answer call: ATA -> %s", strings.TrimSpace(response))
-	writeJSON(w, http.StatusOK, map[string]any{
-		"answered": true,
-		"response": response,
-	})
+	return response, nil
 }
 
 func (a *app) hangupCall(w http.ResponseWriter, _ *http.Request) {

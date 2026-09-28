@@ -83,11 +83,12 @@ async function loadPlatform() {
   } catch (_) {
     return;
   }
-  if (platformCapabilities.os !== "windows") return;
+  const platformName = { windows: "Windows", linux: "Linux" }[platformCapabilities.os];
+  if (!platformName) return;
 
-  document.title = "DJOneHub for Windows";
+  document.title = `DJOneHub for ${platformName}`;
   const platformLabel = document.querySelector(".app-header h1 span");
-  if (platformLabel) platformLabel.textContent = "Windows";
+  if (platformLabel) platformLabel.textContent = platformName;
 
   if (!platformCapabilities.call_audio) {
     const audioRow = document.querySelector(".audio-row");
@@ -1333,7 +1334,7 @@ let audioPrimed = false;
 // Browsers refuse to start audio a page has not been touched for, so the first
 // interaction quietly unlocks the element and asks about notifications.
 function primeAlerts() {
-  if (audioPrimed) return;
+  if (audioPrimed || platformCapabilities.os === "linux") return;
   audioPrimed = true;
   const el = $("#ringtone");
   if (!el.getAttribute("src")) el.src = "/api/ringtone";
@@ -1357,6 +1358,10 @@ function startRinging(number) {
   panel.classList.add("ringing");
   if (ringing) return;
   ringing = true;
+
+  // On Linux the backend rings and raises a GNOME notification itself; doing
+  // it here as well would alert twice.
+  if (platformCapabilities.os === "linux") return;
 
   const el = $("#ringtone");
   if (!el.getAttribute("src")) el.src = "/api/ringtone";
