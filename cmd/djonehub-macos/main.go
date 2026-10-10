@@ -101,6 +101,8 @@ type app struct {
 	smsAutoCleanupME bool
 	smsLastPoll      time.Time
 	smsLastPollError string
+	smsStorage       *smsStorageStatus
+	smsStorageError  string
 
 	callMu             sync.RWMutex
 	activeCall         *callRecord
@@ -807,6 +809,14 @@ func (a *app) pollSMSOnce() error {
 			log.Printf("auto cleanup ME SMS: %d -> %d", before, after)
 		}
 	}
+	storage, storageErr := ensureSMSReceiveStorage(a.usbAT.Command)
+	a.smsMu.Lock()
+	a.smsStorage = storage
+	a.smsStorageError = ""
+	if storageErr != nil {
+		a.smsStorageError = storageErr.Error()
+	}
+	a.smsMu.Unlock()
 	a.setSMSPollStatus(nil)
 	if newCount > 0 {
 		log.Printf("SMS poll cached %d new message(s), total %d", newCount, total)
@@ -1452,7 +1462,7 @@ func (a *app) readUSBATSMS() ([]receivedSMS, error) {
 }
 
 func (a *app) readUSBATSMSFromMemory(memory string) ([]receivedSMS, error) {
-	if _, err := a.usbAT.Command(fmt.Sprintf(`AT+CPMS="%s","%s","%s"`, memory, memory, memory), 5*time.Second); err != nil {
+	if _, err := selectSMSReadStorage(a.usbAT.Command, memory); err != nil {
 		return nil, fmt.Errorf("select storage: %w", err)
 	}
 	resp, err := a.usbAT.Command("AT+CMGL=4", 15*time.Second)
@@ -1494,7 +1504,7 @@ func (a *app) readUSBATSMSFromMemory(memory string) ([]receivedSMS, error) {
 }
 
 func (a *app) clearUSBATSMSMemory(memory string) (before, after int, err error) {
-	resp, err := a.usbAT.Command(fmt.Sprintf(`AT+CPMS="%s","%s","%s"`, memory, memory, memory), 5*time.Second)
+	resp, err := selectSMSReadStorage(a.usbAT.Command, memory)
 	if err != nil {
 		return 0, 0, fmt.Errorf("select storage: %w", err)
 	}
@@ -1502,7 +1512,7 @@ func (a *app) clearUSBATSMSMemory(memory string) (before, after int, err error) 
 	if _, err := a.usbAT.Command("AT+CMGD=1,4", 20*time.Second); err != nil {
 		return before, 0, fmt.Errorf("delete messages: %w", err)
 	}
-	resp, err = a.usbAT.Command(fmt.Sprintf(`AT+CPMS="%s","%s","%s"`, memory, memory, memory), 5*time.Second)
+	resp, err = selectSMSReadStorage(a.usbAT.Command, memory)
 	if err != nil {
 		return before, 0, fmt.Errorf("recheck storage: %w", err)
 	}
@@ -1619,7 +1629,13 @@ func (a *app) smsStatus(w http.ResponseWriter, _ *http.Request) {
 	lastPoll := a.smsLastPoll
 	lastPollError := a.smsLastPollError
 	count := len(a.sms)
+	storage := a.smsStorage
+	storageError := a.smsStorageError
 	a.smsMu.RUnlock()
+	storageWarning := ""
+	if storage != nil && storage.Receive.Full() {
+		storageWarning = "接收短信存储已满，新的短信可能无法接收"
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"count":           count,
 		"polling":         !a.demo && a.modem == nil,
@@ -1627,6 +1643,9 @@ func (a *app) smsStatus(w http.ResponseWriter, _ *http.Request) {
 		"auto_cleanup_me": a.smsAutoCleanupME,
 		"last_poll":       lastPoll,
 		"last_poll_error": lastPollError,
+		"storage":         storage,
+		"storage_error":   storageError,
+		"storage_warning": storageWarning,
 	})
 }
 
