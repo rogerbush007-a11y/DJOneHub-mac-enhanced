@@ -25,6 +25,10 @@ DJOneHub 是一个非官方开源项目。它通过模块已有 USB 接口提供
 - 拔出移动设备或恢复 Mac 完整模式后自动停止活跃保留并释放 wake lock。
 - 首次启用需要模块当前以带 ADB 的 Mac 模式连接；安装完成后可脱离 Mac 使用。
 
+源码中的移动模式还包含 USB 唤醒后的分级恢复：观察约 15 秒仍未看到双向流量进展时，先重建 ECM 网卡；继续停滞时再重建整个 USB 连接。完整 USB 重连会短暂断开模块的所有 USB 功能，包括 ADB。第三次尝试至少间隔 5 分钟，同一未恢复会话最多尝试 3 次；确认双向流量或结束连接会话后重新计数。
+
+恢复以 USB 状态和收发计数为依据，不能直接识别 iPad 亮屏，也不等同于验证其路由、DNS 或网页访问。后台唤醒可能触发恢复；支持范围以大疆第一代 QDC507 的 ECM 移动模式为准，长时间锁屏仍需实机验证。切换回 Mac 完整模式会停用该服务。恢复事件记录在模块 `/data/djonehub/log/network-wake.log`，安装前的脚本备份位于 `/data/djonehub/backup/network-wake-*`。
+
 ## v1.2.9：v1.2.5 — v1.2.9 更新汇总
 
 [下载 v1.2.9](https://github.com/rogerbush007-a11y/DJOneHub-mac-enhanced/releases/tag/v1.2.9)

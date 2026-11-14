@@ -30,6 +30,10 @@ stop)
         test -d "/proc/$pid" && kill -KILL "$pid" 2>/dev/null || true
     fi
     rm -f "$PIDFILE"
+    # SIGKILL while the shell waits for ping/sleep bypasses its EXIT cleanup.
+    if test -w /sys/power/wake_unlock; then
+        echo djonehub_network_wake >/sys/power/wake_unlock 2>/dev/null || true
+    fi
     ;;
 restart)
     "$0" stop

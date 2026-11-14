@@ -38,15 +38,8 @@ func enableModuleNetworkWake() error {
 	if err := adb.push(moduleNetworkWakeInitScript, "/data/local/tmp/djonehub_network_wake.new", 0o100755, 15*time.Second); err != nil {
 		return fmt.Errorf("上传网络唤醒启动项失败: %w", err)
 	}
-	command := "set -e; mkdir -p /data/djonehub/bin /data/djonehub/log /data/djonehub/backup; " +
-		"stamp=$(date +%Y%m%d-%H%M%S); backup=/data/djonehub/backup/network-wake-$stamp; mkdir -p $backup; " +
-		"test ! -e " + moduleNetworkWakeBinary + " || cp -p " + moduleNetworkWakeBinary + " $backup/; " +
-		"test ! -e " + moduleNetworkWakeInit + " || cp -p " + moduleNetworkWakeInit + " $backup/; " +
-		"cp /data/local/tmp/djonehub-network-wake.new " + moduleNetworkWakeBinary + "; chmod 755 " + moduleNetworkWakeBinary + "; " +
-		"cp /data/local/tmp/djonehub_network_wake.new " + moduleNetworkWakeInit + "; chmod 755 " + moduleNetworkWakeInit + "; " +
-		"ln -sfn ../init.d/djonehub_network_wake " + moduleNetworkWakeLink + "; " +
-		"touch " + moduleNetworkWakeFlag + "; " + moduleNetworkWakeInit + " restart; " + moduleNetworkWakeInit + " status"
-	out, status, err := adb.shellChecked(command, 25*time.Second)
+
+	out, status, err := adb.shellChecked(moduleNetworkWakeInstallCommand(), 25*time.Second)
 	if err != nil {
 		return fmt.Errorf("安装网络唤醒服务失败: %w", err)
 	}
@@ -54,6 +47,25 @@ func enableModuleNetworkWake() error {
 		return fmt.Errorf("网络唤醒服务未启动（status=%d, output=%s）", status, strings.TrimSpace(out))
 	}
 	return nil
+}
+
+func moduleNetworkWakeInstallCommand() string {
+	return "set -e; mkdir -p /data/djonehub/bin /data/djonehub/log /data/djonehub/backup; " +
+		"stamp=$(date +%Y%m%d-%H%M%S); backup=/data/djonehub/backup/network-wake-$stamp; mkdir -p $backup; " +
+		"test ! -e " + moduleNetworkWakeBinary + " || cp -p " + moduleNetworkWakeBinary + " $backup/; " +
+		"test ! -e " + moduleNetworkWakeInit + " || cp -p " + moduleNetworkWakeInit + " $backup/; " +
+		"root_readonly=$(awk '$2==\"/\" {ro=($4 ~ /(^|,)ro(,|$)/)} END {print ro+0}' /proc/mounts); " +
+		"trap 'test \"$root_readonly\" != 1 || mount -o remount,ro /' EXIT; " +
+		"trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM; " +
+		"if test \"$root_readonly\" = 1; then mount -o remount,rw /; fi; " +
+		"cp /data/local/tmp/djonehub-network-wake.new " + moduleNetworkWakeBinary + ".new; chmod 755 " + moduleNetworkWakeBinary + ".new; " +
+		"cp /data/local/tmp/djonehub_network_wake.new " + moduleNetworkWakeInit + ".new; chmod 755 " + moduleNetworkWakeInit + ".new; " +
+		"mv -f " + moduleNetworkWakeBinary + ".new " + moduleNetworkWakeBinary + "; " +
+		"mv -f " + moduleNetworkWakeInit + ".new " + moduleNetworkWakeInit + "; " +
+		"ln -sfn ../init.d/djonehub_network_wake " + moduleNetworkWakeLink + "; " +
+		"touch " + moduleNetworkWakeFlag + "; sync; " +
+		"if test \"$root_readonly\" = 1; then mount -o remount,ro /; fi; trap - EXIT HUP INT TERM; " +
+		moduleNetworkWakeInit + " restart; " + moduleNetworkWakeInit + " status"
 }
 
 func disableModuleNetworkWake() error {
@@ -65,7 +77,7 @@ func disableModuleNetworkWake() error {
 	if err := requireModuleRoot(adb); err != nil {
 		return err
 	}
-	out, status, err := adb.shellChecked("rm -f "+moduleNetworkWakeFlag+"; test ! -x "+moduleNetworkWakeInit+" || "+moduleNetworkWakeInit+" stop", 12*time.Second)
+	out, status, err := adb.shellChecked("rm -f "+moduleNetworkWakeFlag+" && { test ! -x "+moduleNetworkWakeInit+" || "+moduleNetworkWakeInit+" stop; }", 12*time.Second)
 	if err != nil {
 		return err
 	}
