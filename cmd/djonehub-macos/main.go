@@ -379,6 +379,7 @@ func main() {
 							instance.installESIMManager(esimManager, false)
 						}
 						go manager.CheckAllSMS()
+						go instance.syncGPSState()
 						return
 					} else {
 						err = startErr
