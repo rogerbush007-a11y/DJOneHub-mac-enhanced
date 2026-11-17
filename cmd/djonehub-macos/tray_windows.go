@@ -65,8 +65,11 @@ var (
 	procDispatchMessageW    = user32.NewProc("DispatchMessageW")
 	procPostMessageW        = user32.NewProc("PostMessageW")
 	procPostQuitMessage     = user32.NewProc("PostQuitMessage")
-	procSetForegroundWindow = user32.NewProc("SetForegroundWindow")
-	procGetCursorPos        = user32.NewProc("GetCursorPos")
+	procSetForegroundWindow        = user32.NewProc("SetForegroundWindow")
+	procBringWindowToTop           = user32.NewProc("BringWindowToTop")
+	procShowWindow                 = user32.NewProc("ShowWindow")
+	procIsIconic                   = user32.NewProc("IsIconic")
+	procGetCursorPos               = user32.NewProc("GetCursorPos")
 	procCreatePopupMenu     = user32.NewProc("CreatePopupMenu")
 	procAppendMenuW         = user32.NewProc("AppendMenuW")
 	procTrackPopupMenu      = user32.NewProc("TrackPopupMenu")
@@ -461,7 +464,8 @@ func isEdgeWindowProcess(hwnd uintptr) bool {
 	return exeName == "msedge.exe"
 }
 
-func closePlatformUIWindows() {
+func findPlatformUIWindows() []uintptr {
+	var hwnds []uintptr
 	cb := syscall.NewCallback(func(hwnd uintptr, _ uintptr) uintptr {
 		visible, _, _ := procIsWindowVisible.Call(hwnd)
 		if visible == 0 {
@@ -472,8 +476,7 @@ func closePlatformUIWindows() {
 		if n == 0 {
 			return 1
 		}
-		className := windows.UTF16ToString(classBuf[:n])
-		if className != "Chrome_WidgetWin_1" {
+		if windows.UTF16ToString(classBuf[:n]) != "Chrome_WidgetWin_1" {
 			return 1
 		}
 		if !isEdgeWindowProcess(hwnd) {
@@ -485,11 +488,39 @@ func closePlatformUIWindows() {
 			return 1
 		}
 		title := windows.UTF16ToString(titleBuf[:tn])
-		// Only close the dedicated DJOneHub Edge --app window, never IDEs or regular Edge tabs.
+		// Only match the dedicated DJOneHub Edge --app window, never IDEs or regular Edge tabs.
 		if title == "DJOneHub for Windows" || title == "DJOneHub for macOS" {
-			_, _, _ = procPostMessageW.Call(hwnd, wmClose, 0, 0)
+			hwnds = append(hwnds, hwnd)
 		}
 		return 1
 	})
 	_, _, _ = procEnumWindows.Call(cb, 0)
+	return hwnds
+}
+
+func focusExistingPlatformUIWindow() bool {
+	hwnds := findPlatformUIWindows()
+	if len(hwnds) == 0 {
+		return false
+	}
+	const (
+		swShow    = 5
+		swRestore = 9
+	)
+	hwnd := hwnds[0]
+	iconic, _, _ := procIsIconic.Call(hwnd)
+	if iconic != 0 {
+		_, _, _ = procShowWindow.Call(hwnd, swRestore)
+	} else {
+		_, _, _ = procShowWindow.Call(hwnd, swShow)
+	}
+	_, _, _ = procBringWindowToTop.Call(hwnd)
+	_, _, _ = procSetForegroundWindow.Call(hwnd)
+	return true
+}
+
+func closePlatformUIWindows() {
+	for _, hwnd := range findPlatformUIWindows() {
+		_, _, _ = procPostMessageW.Call(hwnd, wmClose, 0, 0)
+	}
 }

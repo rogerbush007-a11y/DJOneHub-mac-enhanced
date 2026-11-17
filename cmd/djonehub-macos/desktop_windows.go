@@ -67,6 +67,9 @@ func resolveDialTarget(rawURL string) string {
 }
 
 func openPlatformUI(rawURL string) {
+	if focusExistingPlatformUIWindow() {
+		return
+	}
 	target := resolveDialTarget(rawURL)
 	go func() {
 		deadline := time.Now().Add(5 * time.Second)
@@ -79,6 +82,9 @@ func openPlatformUI(rawURL string) {
 			time.Sleep(100 * time.Millisecond)
 		}
 
+		if focusExistingPlatformUIWindow() {
+			return
+		}
 		if startEdgeApp(rawURL) {
 			return
 		}
@@ -95,6 +101,9 @@ func platformOpenExistingUI(rawURL string) bool {
 		return false
 	}
 	_ = conn.Close()
+	if focusExistingPlatformUIWindow() {
+		return true
+	}
 	if startEdgeApp(rawURL) {
 		return true
 	}
