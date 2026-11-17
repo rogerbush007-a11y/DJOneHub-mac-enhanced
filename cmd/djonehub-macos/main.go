@@ -2858,6 +2858,9 @@ func parsePDPAddresses(resp string) []string {
 }
 
 func discoverMacNetworkInterfaces() []macNetInterface {
+	if runtime.GOOS != "darwin" {
+		return nil
+	}
 	out, err := exec.Command("ifconfig").Output()
 	if err != nil {
 		return nil
@@ -2905,6 +2908,9 @@ func discoverMacNetworkInterfaces() []macNetInterface {
 }
 
 func discoverMacDefaultRoute() macDefaultRoute {
+	if runtime.GOOS != "darwin" {
+		return macDefaultRoute{}
+	}
 	out, err := exec.Command("route", "-n", "get", "default").Output()
 	if err != nil {
 		return macDefaultRoute{}
@@ -2991,6 +2997,9 @@ func isUsableUSBTrafficInterface(item macNetInterface) bool {
 }
 
 func discoverMacInterfaceCounters() (map[string]networkByteCounters, error) {
+	if runtime.GOOS != "darwin" {
+		return nil, errors.New("macOS netstat counters are only available on darwin")
+	}
 	out, err := exec.Command("netstat", "-ibn").Output()
 	if err != nil {
 		return nil, err
