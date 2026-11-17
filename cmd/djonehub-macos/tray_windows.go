@@ -3,11 +3,8 @@
 package main
 
 import (
-	"bytes"
 	"context"
-	"image"
-	"image/color"
-	"image/png"
+	_ "embed"
 	"log"
 	"path/filepath"
 	"runtime"
@@ -65,11 +62,11 @@ var (
 	procDispatchMessageW    = user32.NewProc("DispatchMessageW")
 	procPostMessageW        = user32.NewProc("PostMessageW")
 	procPostQuitMessage     = user32.NewProc("PostQuitMessage")
-	procSetForegroundWindow        = user32.NewProc("SetForegroundWindow")
-	procBringWindowToTop           = user32.NewProc("BringWindowToTop")
-	procShowWindow                 = user32.NewProc("ShowWindow")
-	procIsIconic                   = user32.NewProc("IsIconic")
-	procGetCursorPos               = user32.NewProc("GetCursorPos")
+	procSetForegroundWindow = user32.NewProc("SetForegroundWindow")
+	procBringWindowToTop    = user32.NewProc("BringWindowToTop")
+	procShowWindow          = user32.NewProc("ShowWindow")
+	procIsIconic            = user32.NewProc("IsIconic")
+	procGetCursorPos        = user32.NewProc("GetCursorPos")
 	procCreatePopupMenu     = user32.NewProc("CreatePopupMenu")
 	procAppendMenuW         = user32.NewProc("AppendMenuW")
 	procTrackPopupMenu      = user32.NewProc("TrackPopupMenu")
@@ -356,11 +353,14 @@ func copyUTF16(dst []uint16, text string) {
 	dst[len(dst)-1] = 0
 }
 
+//go:embed web/favicon.png
+var trayIconPNG []byte
+
 func createTrayIcon() (uintptr, bool) {
-	if pngBytes := buildTrayPNG(); len(pngBytes) > 0 {
+	if len(trayIconPNG) > 0 {
 		hIcon, _, _ := procCreateIconFromResEx.Call(
-			uintptr(unsafe.Pointer(&pngBytes[0])),
-			uintptr(len(pngBytes)),
+			uintptr(unsafe.Pointer(&trayIconPNG[0])),
+			uintptr(len(trayIconPNG)),
 			1,
 			iconVersion,
 			32,
@@ -373,52 +373,6 @@ func createTrayIcon() (uintptr, bool) {
 	}
 	hIcon, _, _ := procLoadIconW.Call(0, idiApplication)
 	return hIcon, false
-}
-
-func buildTrayPNG() []byte {
-	const size = 32
-	img := image.NewNRGBA(image.Rect(0, 0, size, size))
-	bg := color.NRGBA{R: 15, G: 118, B: 230, A: 255}
-	fg := color.NRGBA{R: 255, G: 255, B: 255, A: 255}
-
-	for y := 0; y < size; y++ {
-		for x := 0; x < size; x++ {
-			dx := x - size/2
-			dy := y - size/2
-			// Draw a clean rounded square / badge background.
-			ax := dx
-			if ax < 0 {
-				ax = -ax
-			}
-			ay := dy
-			if ay < 0 {
-				ay = -ay
-			}
-			if ax <= 13 && ay <= 13 && (ax <= 10 || ay <= 10 || (ax-10)*(ax-10)+(ay-10)*(ay-10) <= 9) {
-				img.SetNRGBA(x, y, bg)
-			}
-		}
-	}
-
-	// Draw 3 signal bars inside the badge.
-	bars := [][4]int{
-		{9, 18, 12, 23},
-		{14, 14, 17, 23},
-		{19, 9, 22, 23},
-	}
-	for _, b := range bars {
-		for y := b[1]; y <= b[3]; y++ {
-			for x := b[0]; x <= b[2]; x++ {
-				img.SetNRGBA(x, y, fg)
-			}
-		}
-	}
-
-	var buf bytes.Buffer
-	if err := png.Encode(&buf, img); err != nil {
-		return nil
-	}
-	return buf.Bytes()
 }
 
 func shellOpenPath(target, workDir string) bool {
