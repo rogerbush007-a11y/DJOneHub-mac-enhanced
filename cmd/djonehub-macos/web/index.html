@@ -3,6 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="icon" type="image/png" href="/favicon.png">
   <title>DJOneHub for macOS</title>
   <script>
     try {
@@ -244,8 +245,8 @@
         </div>
         <div id="network-checks" class="list empty">尚未检测</div>
         <h2 class="subheading">网络策略</h2>
-        <p class="inline-status">模块固定保持 usbnet=1，短信、来电监控和 4G 网卡同时在线。macOS 优先使用 Wi‑Fi，Wi‑Fi 不可用时自动使用 4G，不再切换模块模式或重启模块。</p>
-        <h2 class="subheading">macOS 网络接口</h2>
+        <p id="network-policy-summary" class="inline-status">模块固定保持 usbnet=1，短信、来电监控和 4G 网卡同时在线。macOS 优先使用 Wi‑Fi，Wi‑Fi 不可用时自动使用 4G，不再切换模块模式或重启模块。</p>
+        <h2 id="network-interfaces-heading" class="subheading">macOS 网络接口</h2>
         <div id="network-interfaces" class="list empty">尚未读取接口</div>
       </section>
 

@@ -56,9 +56,23 @@ func (a *app) setGPSResult(fix *gpsFix, err error) {
 	a.gpsLastError = ""
 }
 
+func hasCMEErrorCode(err error, response, code string) bool {
+	if strings.Contains(response, "+CME ERROR: "+code) || strings.Contains(response, "+CME ERROR:"+code) {
+		return true
+	}
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "+CME ERROR: "+code) || strings.Contains(msg, "+CME ERROR:"+code)
+}
+
 func (a *app) readGPSLocation() (*gpsFix, error) {
 	response, err := a.runATCommand("AT+QGPSLOC=2", 12*time.Second)
 	if err != nil {
+		if hasCMEErrorCode(err, response, "516") {
+			return nil, fmt.Errorf("暂未获得定位，请移至窗边或室外后重试")
+		}
 		return nil, err
 	}
 	return parseGPSLocation(response)
@@ -117,7 +131,9 @@ func (a *app) gpsStatus(w http.ResponseWriter, _ *http.Request) {
 
 func (a *app) startGPS(w http.ResponseWriter, _ *http.Request) {
 	response, err := a.runATCommand("AT+QGPS=1", 8*time.Second)
-	if err != nil || !strings.Contains(response, "OK") {
+	// +CME ERROR: 504 means a GNSS session is already active on the module.
+	alreadyActive := hasCMEErrorCode(err, response, "504")
+	if !alreadyActive && (err != nil || !strings.Contains(response, "OK")) {
 		if err == nil {
 			err = fmt.Errorf("模块未确认启动定位")
 		}
@@ -136,7 +152,9 @@ func (a *app) startGPS(w http.ResponseWriter, _ *http.Request) {
 
 func (a *app) stopGPS(w http.ResponseWriter, _ *http.Request) {
 	response, err := a.runATCommand("AT+QGPSEND", 8*time.Second)
-	if err != nil || !strings.Contains(response, "OK") {
+	// +CME ERROR: 505 means no GNSS session is currently active.
+	alreadyStopped := hasCMEErrorCode(err, response, "505")
+	if !alreadyStopped && (err != nil || !strings.Contains(response, "OK")) {
 		if err == nil {
 			err = fmt.Errorf("模块未确认停止定位")
 		}

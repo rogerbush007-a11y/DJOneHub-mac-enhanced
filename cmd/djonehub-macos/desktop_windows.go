@@ -3,27 +3,38 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"io"
 	"log"
 	"net"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 )
 
-func initPlatformRuntime() func() {
+func windowsLogDir() string {
 	base := strings.TrimSpace(os.Getenv("LOCALAPPDATA"))
 	if base == "" {
 		base = os.TempDir()
 	}
-	logDir := filepath.Join(base, "DJOneHub", "logs")
+	return filepath.Join(base, "DJOneHub", "logs")
+}
+
+func windowsLogFile() string {
+	return filepath.Join(windowsLogDir(), "djonehub.log")
+}
+
+func initPlatformRuntime() func() {
+	logDir := windowsLogDir()
 	if err := os.MkdirAll(logDir, 0o755); err != nil {
 		return func() {}
 	}
-	file, err := os.OpenFile(filepath.Join(logDir, "djonehub.log"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	file, err := os.OpenFile(windowsLogFile(), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
 		return func() {}
 	}
@@ -32,11 +43,38 @@ func initPlatformRuntime() func() {
 	return func() { _ = file.Close() }
 }
 
-func openPlatformUI(url string) {
+func withPlatformLifecycle(parent context.Context, uiURL string) (context.Context, func()) {
+	ctx, cancel := context.WithCancel(parent)
+	stopTray := startWindowsTray(ctx, cancel, uiURL)
+	return ctx, func() {
+		stopTray()
+		cancel()
+	}
+}
+
+func newHiddenCommand(name string, args ...string) *exec.Cmd {
+	cmd := exec.Command(name, args...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	return cmd
+}
+
+func resolveDialTarget(rawURL string) string {
+	parsed, err := url.Parse(rawURL)
+	if err == nil && strings.TrimSpace(parsed.Host) != "" {
+		return parsed.Host
+	}
+	return "127.0.0.1:7575"
+}
+
+func openPlatformUI(rawURL string) {
+	if focusExistingPlatformUIWindow() {
+		return
+	}
+	target := resolveDialTarget(rawURL)
 	go func() {
 		deadline := time.Now().Add(5 * time.Second)
 		for time.Now().Before(deadline) {
-			conn, err := net.DialTimeout("tcp", "127.0.0.1:7575", 250*time.Millisecond)
+			conn, err := net.DialTimeout("tcp", target, 250*time.Millisecond)
 			if err == nil {
 				_ = conn.Close()
 				break
@@ -44,26 +82,38 @@ func openPlatformUI(url string) {
 			time.Sleep(100 * time.Millisecond)
 		}
 
-		if startEdgeApp(url) {
+		if focusExistingPlatformUIWindow() {
 			return
 		}
-		if err := exec.Command("rundll32.exe", "url.dll,FileProtocolHandler", url).Start(); err != nil {
+		if startEdgeApp(rawURL) {
+			return
+		}
+		if err := newHiddenCommand("rundll32.exe", "url.dll,FileProtocolHandler", rawURL).Start(); err != nil {
 			log.Printf("open desktop UI: %v", err)
 		}
 	}()
 }
 
-func platformOpenExistingUI(url string) bool {
-	conn, err := net.DialTimeout("tcp", "127.0.0.1:7575", 500*time.Millisecond)
+func platformOpenExistingUI(rawURL string) bool {
+	target := resolveDialTarget(rawURL)
+	conn, err := net.DialTimeout("tcp", target, 500*time.Millisecond)
 	if err != nil {
 		return false
 	}
 	_ = conn.Close()
-	openPlatformUI(url)
+	if focusExistingPlatformUIWindow() {
+		return true
+	}
+	if startEdgeApp(rawURL) {
+		return true
+	}
+	if err := newHiddenCommand("rundll32.exe", "url.dll,FileProtocolHandler", rawURL).Start(); err != nil {
+		log.Printf("open existing desktop UI: %v", err)
+	}
 	return true
 }
 
-func startEdgeApp(url string) bool {
+func startEdgeApp(rawURL string) bool {
 	var candidates []string
 	for _, base := range []string{os.Getenv("PROGRAMFILES(X86)"), os.Getenv("PROGRAMFILES"), os.Getenv("LOCALAPPDATA")} {
 		if strings.TrimSpace(base) == "" {
@@ -79,9 +129,23 @@ func startEdgeApp(url string) bool {
 		} else if err != nil {
 			continue
 		}
-		if err := exec.Command(path, "--app="+url, "--start-windowed").Start(); err == nil {
+		if err := newHiddenCommand(path, "--app="+rawURL, "--start-windowed").Start(); err == nil {
 			return true
 		}
 	}
 	return false
+}
+
+func openWindowsLogDir() {
+	dir := windowsLogDir()
+	_ = os.MkdirAll(dir, 0o755)
+	logFile := windowsLogFile()
+	if _, err := os.Stat(logFile); err == nil {
+		if shellOpenPath(logFile, dir) {
+			return
+		}
+	}
+	if !shellOpenPath(dir, "") {
+		log.Printf("open log path failed: %s", dir)
+	}
 }

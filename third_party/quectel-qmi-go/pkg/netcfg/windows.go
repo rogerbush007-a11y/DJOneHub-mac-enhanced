@@ -5,6 +5,7 @@ import (
 	"net"
 	"os/exec"
 	"strconv"
+	"syscall"
 )
 
 // WindowsConfigurator implements NetworkConfigurator for Windows using netsh
@@ -17,6 +18,7 @@ func NewWindowsConfigurator() *WindowsConfigurator {
 
 func (w *WindowsConfigurator) run(args ...string) error {
 	cmd := exec.Command("netsh", args...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("command failed: %s, output: %s", err, string(out))
 	}

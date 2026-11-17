@@ -25,8 +25,9 @@ $Shortcut.Save()
 
 $UninstallShortcut = $Shell.CreateShortcut((Join-Path $StartMenu "Uninstall DJOneHub.lnk"))
 $UninstallShortcut.TargetPath = "powershell.exe"
-$UninstallShortcut.Arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$(Join-Path $InstallDir 'uninstall.ps1')`""
+$UninstallShortcut.Arguments = "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$(Join-Path $InstallDir 'uninstall.ps1')`""
 $UninstallShortcut.WorkingDirectory = $InstallDir
+$UninstallShortcut.WindowStyle = 7
 $UninstallShortcut.Save()
 
 Write-Host "DJOneHub installation completed."
