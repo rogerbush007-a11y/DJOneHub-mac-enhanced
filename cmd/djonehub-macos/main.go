@@ -34,6 +34,7 @@ import (
 	"github.com/iniwex5/vohive/internal/modem"
 	"github.com/iniwex5/vohive/pkg/smscodec"
 	"go.bug.st/serial"
+	"go.bug.st/serial/enumerator"
 )
 
 //go:embed web/*
@@ -303,42 +304,108 @@ func main() {
 	flag.BoolVar(&webConsole, "web-console", false, "serve the embedded compatibility console")
 	flag.Parse()
 
+	listener, listenErr := net.Listen("tcp", listen)
+	if listenErr != nil {
+		if platformOpenExistingUI("http://" + listen) {
+			return
+		}
+		log.Printf("HTTP listen failed: %v", listenErr)
+		return
+	}
+
 	if demo {
 		instance := newDemoApp()
 		instance.webConsole = webConsole
 		log.Printf("DJOneHub demo mode")
-		serve(instance, listen)
+		serveWithListener(instance, listen, listener)
 		return
 	}
 
 	if strings.TrimSpace(port) == "" {
-		var err error
-		port, err = discoverATPort()
-		if err != nil {
+		instance := &app{
+			port:             "正在探测 AT 串口...",
+			smsPollInterval:  8 * time.Second,
+			smsAutoCleanupME: true,
+			smsReassembler:   smscodec.NewReassembler(),
+			callPollInterval: 3 * time.Second,
+			audio:            newAudioRouter(),
+			webConsole:       webConsole,
+		}
+		go instance.startSMSPoller(context.Background())
+		go instance.startCallPoller(context.Background())
+		go instance.startGPSPoller(context.Background())
+		go instance.startSignalRecovery(context.Background())
+		go instance.syncGPSState()
+
+		var cleanupModem func()
+		go func() {
+			discoveredPort, err := discoverATPort()
+			if err == nil {
+				cfg := config.DeviceConfig{
+					ID:            "mac-modem",
+					Name:          "DJI 4G Module",
+					ATPort:        discoveredPort,
+					ManagePort:    discoveredPort,
+					DeviceBackend: backend.BackendAT,
+					ESIMTransport: "at",
+					BaudRate:      115200,
+					DataBits:      8,
+					StopBits:      1,
+					Parity:        "none",
+					SMSEnabled:    true,
+				}
+				manager, modErr := modem.New(cfg)
+				if modErr == nil {
+					manager.SetSMSCallback(instance.recordSMS)
+					if startErr := manager.Start(); startErr == nil {
+						cleanupModem = manager.Stop
+						instance.modem = manager
+						instance.port = discoveredPort
+						instance.discoveryError = ""
+						log.Printf("DJOneHub is using %s", discoveredPort)
+						if !manager.WaitReady(15 * time.Second) {
+							log.Printf("modem initialization is still running; the web UI will remain available")
+						}
+						atBackend := backend.NewATBackend(manager)
+						esimManager, esimErr := esim.NewManager(esim.ManagerOptions{
+							DeviceID:  "mac-modem",
+							Transport: "at",
+							Modem:     manager,
+							Backend:   atBackend,
+						})
+						if esimErr != nil {
+							log.Printf("eSIM manager unavailable: %v", esimErr)
+						} else {
+							instance.installESIMManager(esimManager, false)
+						}
+						go manager.CheckAllSMS()
+						return
+					} else {
+						err = startErr
+					}
+				} else {
+					err = modErr
+				}
+			}
+
 			usbDevice := discoverDJIUSBDevice()
 			usbATDevice, usbATErr := openDJIUSBAT()
-			instance := &app{
-				port:             "未发现 AT 串口",
-				discoveryError:   err.Error(),
-				usbDevice:        usbDevice,
-				usbAT:            usbATDevice,
-				smsPollInterval:  8 * time.Second,
-				smsAutoCleanupME: true,
-				smsReassembler:   smscodec.NewReassembler(),
-				callPollInterval: 3 * time.Second,
-				audio:            newAudioRouter(),
-				webConsole:       webConsole,
+			instance.port = "未发现 AT 串口"
+			if err != nil {
+				instance.discoveryError = err.Error()
 			}
+			instance.usbDevice = usbDevice
+			instance.usbAT = usbATDevice
 			if usbDevice != nil {
 				log.Printf("DJI USB device detected without AT serial port: %s %s (%s:%s)",
 					usbDevice.Vendor, usbDevice.Product, usbDevice.VendorID, usbDevice.ProductID)
 			}
 			if usbATErr != nil {
 				log.Printf("USB AT unavailable: %v", usbATErr)
-			} else {
+			} else if usbATDevice != nil {
 				instance.port = usbATDevice.Description()
 				instance.discoveryError = ""
-				defer usbATDevice.Close()
+				cleanupModem = usbATDevice.Close
 				log.Printf("USB AT bridge opened on DJI %s", usbATDevice.Description())
 				if changed, profileErr := instance.autoEnableMacAudioProfile(); profileErr != nil {
 					log.Printf("Mac audio profile check: %v", profileErr)
@@ -347,21 +414,17 @@ func main() {
 				}
 				if instance.usbAT != nil {
 					instance.initUSBATESIMManager()
-					// Network repair can wait through two DHCP attempts. Do not
-					// hold the local API listener hostage during startup: the App
-					// must be able to show module/setup progress while 4G settles.
 					go instance.ensureCellularDHCP()
 				}
 			}
 			log.Printf("modem discovery skipped: %v", err)
-			go instance.startSMSPoller(context.Background())
-			go instance.startCallPoller(context.Background())
-			go instance.startGPSPoller(context.Background())
-			go instance.startSignalRecovery(context.Background())
-			go instance.syncGPSState()
-			serve(instance, listen)
-			return
+		}()
+
+		serveWithListener(instance, listen, listener)
+		if cleanupModem != nil {
+			cleanupModem()
 		}
+		return
 	}
 
 	cfg := config.DeviceConfig{
@@ -417,7 +480,7 @@ func main() {
 	go instance.startGPSPoller(context.Background())
 	go instance.syncGPSState()
 
-	serve(instance, listen)
+	serveWithListener(instance, listen, listener)
 }
 
 func (a *app) initUSBATESIMManager() {
@@ -461,6 +524,18 @@ func (a *app) installESIMManager(manager *esim.Manager, switchAllowed bool) bool
 }
 
 func serve(instance *app, listen string) {
+	listener, err := net.Listen("tcp", listen)
+	if err != nil {
+		if platformOpenExistingUI("http://" + listen) {
+			return
+		}
+		log.Printf("HTTP listen failed: %v", err)
+		return
+	}
+	serveWithListener(instance, listen, listener)
+}
+
+func serveWithListener(instance *app, listen string, listener net.Listener) {
 	server := &http.Server{
 		Addr:              listen,
 		Handler:           instance.routes(),
@@ -476,14 +551,6 @@ func serve(instance *app, listen string) {
 		log.Printf("DJOneHub is using %s", instance.port)
 	}
 	log.Printf("Open http://%s", listen)
-	listener, err := net.Listen("tcp", listen)
-	if err != nil {
-		if platformOpenExistingUI("http://" + listen) {
-			return
-		}
-		log.Printf("HTTP listen failed: %v", err)
-		return
-	}
 	uiURL := "http://" + listen
 	ctx, platformStop := withPlatformLifecycle(ctx, uiURL)
 	defer platformStop()
@@ -533,6 +600,37 @@ func newDemoApp() *app {
 }
 
 func discoverATPort() (string, error) {
+	if runtime.GOOS == "windows" {
+		if detailed, err := enumerator.GetDetailedPortsList(); err == nil {
+			var usbPorts []string
+			for _, p := range detailed {
+				if p == nil || !p.IsUSB {
+					continue
+				}
+				name := strings.TrimSpace(p.Name)
+				if name == "" {
+					continue
+				}
+				usbPorts = append(usbPorts, name)
+			}
+			usbPorts = filterCandidateATPorts(usbPorts, runtime.GOOS)
+			sort.SliceStable(usbPorts, func(i, j int) bool {
+				return portScore(usbPorts[i]) > portScore(usbPorts[j])
+			})
+			var attempted []string
+			for _, port := range usbPorts {
+				attempted = append(attempted, port)
+				if _, err := modem.ProbeIMEICached(port, 2*time.Second); err == nil {
+					return port, nil
+				}
+			}
+			if len(attempted) == 0 {
+				return "", errors.New("no Windows USB COM ports found; install the module serial driver or pass -port COMx explicitly")
+			}
+			return "", fmt.Errorf("no AT-capable USB port found among %s", strings.Join(attempted, ", "))
+		}
+	}
+
 	ports, err := serial.GetPortsList()
 	if err != nil {
 		return "", fmt.Errorf("list serial ports: %w", err)
