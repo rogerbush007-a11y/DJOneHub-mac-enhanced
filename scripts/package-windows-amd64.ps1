@@ -3,6 +3,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$ProgressPreference = "SilentlyContinue"
 $RootDir = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $PackageName = "DJOneHub-Windows-amd64-$Version"
 $StageRoot = Join-Path $RootDir "dist\release"
