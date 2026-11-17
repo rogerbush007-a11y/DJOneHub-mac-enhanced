@@ -103,6 +103,14 @@ async function loadPlatform() {
     const policy = document.querySelector("#cellular-policy-toggle")?.closest(".network-policy-control");
     if (policy) policy.hidden = true;
   }
+  const policySummary = document.querySelector("#network-policy-summary");
+  if (policySummary) {
+    policySummary.textContent = "Windows 端通过模块 COM 串口提供状态、AT 调试、短信、GPS 与通话控制；USB 网络策略与独立通话音频暂未启用。";
+  }
+  const ifacesHeading = document.querySelector("#network-interfaces-heading");
+  if (ifacesHeading) {
+    ifacesHeading.textContent = "Windows 网络接口";
+  }
 }
 
 function renderCellularPolicy(state) {
@@ -948,9 +956,10 @@ async function loadNetwork() {
     const routeText = route.interface
       ? `${route.interface}${route.gateway ? ` -> ${route.gateway}` : ""}`
       : "未知";
+    const osLabel = platformCapabilities.os === "windows" ? "Windows" : "macOS";
     grid.replaceChildren(
-      diagnosticCard("USB 网卡", diag.usb_network_present ? "已识别" : "未识别", "macOS 是否出现可用 USB 网络接口"),
-      diagnosticCard("默认出口", routeText, "当前 macOS 实际优先使用的网卡和网关"),
+      diagnosticCard("USB 网卡", diag.usb_network_present ? "已识别" : "未识别", `${osLabel} 是否出现可用 USB 网络接口`),
+      diagnosticCard("默认出口", routeText, `当前 ${osLabel} 实际优先使用的网卡和网关`),
       diagnosticCard("usbnet", diag.usbnet_mode || "未知", "模块当前 USB 网络模式"),
       diagnosticCard("蜂窝数据", active ? `已激活 ${active}` : "未激活", "PDP context 激活状态"),
       diagnosticCard("蜂窝 IP", addresses || "无", "模块侧拿到的数据网络地址"),
@@ -960,8 +969,8 @@ async function loadNetwork() {
 
     const errorText = diag.errors ? ` · 错误：${Object.values(diag.errors).join("；")}` : "";
     $("#network-status").textContent = diag.usb_network_present
-      ? `macOS 已识别 USB 网络接口${errorText}`
-      : `蜂窝侧可能已通，但 macOS 尚未识别 USB 网卡${errorText}`;
+      ? `${osLabel} 已识别 USB 网络接口${errorText}`
+      : `蜂窝侧可能已通，但 ${osLabel} 尚未识别 USB 网卡${errorText}`;
 
     const interfaces = Array.isArray(diag.mac_interfaces) ? diag.mac_interfaces : [];
     if (!interfaces.length) {

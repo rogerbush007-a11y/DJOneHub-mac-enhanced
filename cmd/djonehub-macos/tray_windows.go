@@ -9,6 +9,7 @@ import (
 	"image/color"
 	"image/png"
 	"log"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -74,10 +75,11 @@ var (
 	procCreateIconFromResEx = user32.NewProc("CreateIconFromResourceEx")
 	procDestroyIcon         = user32.NewProc("DestroyIcon")
 	procEnumWindows         = user32.NewProc("EnumWindows")
-	procGetClassNameW       = user32.NewProc("GetClassNameW")
-	procGetWindowTextW      = user32.NewProc("GetWindowTextW")
-	procIsWindowVisible     = user32.NewProc("IsWindowVisible")
-	procShellNotifyIconW    = shell32.NewProc("Shell_NotifyIconW")
+	procGetClassNameW              = user32.NewProc("GetClassNameW")
+	procGetWindowTextW             = user32.NewProc("GetWindowTextW")
+	procIsWindowVisible            = user32.NewProc("IsWindowVisible")
+	procGetWindowThreadProcessId   = user32.NewProc("GetWindowThreadProcessId")
+	procShellNotifyIconW           = shell32.NewProc("Shell_NotifyIconW")
 	procShellExecuteW       = shell32.NewProc("ShellExecuteW")
 	procGetModuleHandleW    = kernel32.NewProc("GetModuleHandleW")
 )
@@ -438,6 +440,27 @@ func shellOpenPath(target, workDir string) bool {
 	return ret > 32
 }
 
+func isEdgeWindowProcess(hwnd uintptr) bool {
+	var pid uint32
+	_, _, _ = procGetWindowThreadProcessId.Call(hwnd, uintptr(unsafe.Pointer(&pid)))
+	if pid == 0 {
+		return false
+	}
+	handle, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, pid)
+	if err != nil {
+		return false
+	}
+	defer windows.CloseHandle(handle)
+
+	var buf [windows.MAX_PATH]uint16
+	size := uint32(len(buf))
+	if err := windows.QueryFullProcessImageName(handle, 0, &buf[0], &size); err != nil {
+		return false
+	}
+	exeName := strings.ToLower(filepath.Base(windows.UTF16ToString(buf[:size])))
+	return exeName == "msedge.exe"
+}
+
 func closePlatformUIWindows() {
 	cb := syscall.NewCallback(func(hwnd uintptr, _ uintptr) uintptr {
 		visible, _, _ := procIsWindowVisible.Call(hwnd)
@@ -453,14 +476,17 @@ func closePlatformUIWindows() {
 		if className != "Chrome_WidgetWin_1" {
 			return 1
 		}
+		if !isEdgeWindowProcess(hwnd) {
+			return 1
+		}
 		var titleBuf [256]uint16
 		tn, _, _ := procGetWindowTextW.Call(hwnd, uintptr(unsafe.Pointer(&titleBuf[0])), uintptr(len(titleBuf)))
 		if tn == 0 {
 			return 1
 		}
 		title := windows.UTF16ToString(titleBuf[:tn])
-		// Match the Edge --app window title without closing regular multi-tab Edge windows.
-		if strings.HasPrefix(title, "DJOneHub") && !strings.Contains(title, "Microsoft") {
+		// Only close the dedicated DJOneHub Edge --app window, never IDEs or regular Edge tabs.
+		if title == "DJOneHub for Windows" || title == "DJOneHub for macOS" {
 			_, _, _ = procPostMessageW.Call(hwnd, wmClose, 0, 0)
 		}
 		return 1
