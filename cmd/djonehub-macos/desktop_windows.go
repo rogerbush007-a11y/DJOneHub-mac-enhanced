@@ -25,12 +25,16 @@ func windowsLogDir() string {
 	return filepath.Join(base, "DJOneHub", "logs")
 }
 
+func windowsLogFile() string {
+	return filepath.Join(windowsLogDir(), "djonehub.log")
+}
+
 func initPlatformRuntime() func() {
 	logDir := windowsLogDir()
 	if err := os.MkdirAll(logDir, 0o755); err != nil {
 		return func() {}
 	}
-	file, err := os.OpenFile(filepath.Join(logDir, "djonehub.log"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	file, err := os.OpenFile(windowsLogFile(), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
 		return func() {}
 	}
@@ -126,7 +130,13 @@ func startEdgeApp(rawURL string) bool {
 func openWindowsLogDir() {
 	dir := windowsLogDir()
 	_ = os.MkdirAll(dir, 0o755)
-	if err := newHiddenCommand("explorer.exe", dir).Start(); err != nil {
-		log.Printf("open log dir: %v", err)
+	logFile := windowsLogFile()
+	if _, err := os.Stat(logFile); err == nil {
+		if shellOpenPath(logFile, dir) {
+			return
+		}
+	}
+	if !shellOpenPath(dir, "") {
+		log.Printf("open log path failed: %s", dir)
 	}
 }

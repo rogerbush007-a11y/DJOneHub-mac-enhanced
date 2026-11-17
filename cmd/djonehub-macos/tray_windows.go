@@ -10,6 +10,7 @@ import (
 	"image/png"
 	"log"
 	"runtime"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -72,7 +73,12 @@ var (
 	procLoadIconW           = user32.NewProc("LoadIconW")
 	procCreateIconFromResEx = user32.NewProc("CreateIconFromResourceEx")
 	procDestroyIcon         = user32.NewProc("DestroyIcon")
+	procEnumWindows         = user32.NewProc("EnumWindows")
+	procGetClassNameW       = user32.NewProc("GetClassNameW")
+	procGetWindowTextW      = user32.NewProc("GetWindowTextW")
+	procIsWindowVisible     = user32.NewProc("IsWindowVisible")
 	procShellNotifyIconW    = shell32.NewProc("Shell_NotifyIconW")
+	procShellExecuteW       = shell32.NewProc("ShellExecuteW")
 	procGetModuleHandleW    = kernel32.NewProc("GetModuleHandleW")
 )
 
@@ -213,6 +219,7 @@ func startWindowsTray(ctx context.Context, cancel context.CancelFunc, uiURL stri
 	stopOnce := sync.Once{}
 	stop := func() {
 		stopOnce.Do(func() {
+			closePlatformUIWindows()
 			if hwnd != 0 {
 				_, _, _ = procPostMessageW.Call(hwnd, wmClose, 0, 0)
 			}
@@ -249,6 +256,7 @@ func (s *windowsTrayState) handleMessage(hwnd uintptr, uMsg uint32, wParam, lPar
 			openWindowsLogDir()
 		case menuExitID:
 			s.removeTrayIcon()
+			closePlatformUIWindows()
 			if s.cancel != nil {
 				s.cancel()
 			}
@@ -406,4 +414,56 @@ func buildTrayPNG() []byte {
 		return nil
 	}
 	return buf.Bytes()
+}
+
+func shellOpenPath(target, workDir string) bool {
+	verbPtr, _ := windows.UTF16PtrFromString("open")
+	targetPtr, err := windows.UTF16PtrFromString(target)
+	if err != nil {
+		return false
+	}
+	var dirPtr *uint16
+	if strings.TrimSpace(workDir) != "" {
+		dirPtr, _ = windows.UTF16PtrFromString(workDir)
+	}
+	const swShowNormal = 1
+	ret, _, _ := procShellExecuteW.Call(
+		0,
+		uintptr(unsafe.Pointer(verbPtr)),
+		uintptr(unsafe.Pointer(targetPtr)),
+		0,
+		uintptr(unsafe.Pointer(dirPtr)),
+		swShowNormal,
+	)
+	return ret > 32
+}
+
+func closePlatformUIWindows() {
+	cb := syscall.NewCallback(func(hwnd uintptr, _ uintptr) uintptr {
+		visible, _, _ := procIsWindowVisible.Call(hwnd)
+		if visible == 0 {
+			return 1
+		}
+		var classBuf [128]uint16
+		n, _, _ := procGetClassNameW.Call(hwnd, uintptr(unsafe.Pointer(&classBuf[0])), uintptr(len(classBuf)))
+		if n == 0 {
+			return 1
+		}
+		className := windows.UTF16ToString(classBuf[:n])
+		if className != "Chrome_WidgetWin_1" {
+			return 1
+		}
+		var titleBuf [256]uint16
+		tn, _, _ := procGetWindowTextW.Call(hwnd, uintptr(unsafe.Pointer(&titleBuf[0])), uintptr(len(titleBuf)))
+		if tn == 0 {
+			return 1
+		}
+		title := windows.UTF16ToString(titleBuf[:tn])
+		// Match the Edge --app window title without closing regular multi-tab Edge windows.
+		if strings.HasPrefix(title, "DJOneHub") && !strings.Contains(title, "Microsoft") {
+			_, _, _ = procPostMessageW.Call(hwnd, wmClose, 0, 0)
+		}
+		return 1
+	})
+	_, _, _ = procEnumWindows.Call(cb, 0)
 }
