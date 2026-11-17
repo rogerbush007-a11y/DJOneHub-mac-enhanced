@@ -2495,6 +2495,9 @@ func appendUnique(items []string, value string) []string {
 }
 
 func (a *app) applyCellularPolicyLocked() error {
+	if runtime.GOOS != "darwin" {
+		return errors.New("当前系统暂不支持该网络策略切换")
+	}
 	services, err := discoverMacNetworkServices()
 	if err != nil {
 		return err
