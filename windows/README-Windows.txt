@@ -4,9 +4,17 @@ DJOneHub for Windows amd64
 Install
 -------
 1. Extract the complete ZIP archive.
-2. Double-click "Install DJOneHub.cmd".
+2. Double-click "Install DJOneHub.cmd" (or run DJOneHub.exe directly).
 3. Connect the DJI first-generation 4G module and install its Windows serial
    driver if Windows does not expose a COM port.
+
+Usage & Tray
+------------
+- DJOneHub.exe runs as a Windows GUI application without a console window.
+- Right-click the DJOneHub icon in the Windows system tray to open the control
+  panel, open the log folder (%LOCALAPPDATA%\DJOneHub\logs), or exit cleanly.
+- Build on Windows without a console window:
+    powershell -ExecutionPolicy Bypass -File .\scripts\build-windows.ps1
 
 Current Windows boundary
 ------------------------

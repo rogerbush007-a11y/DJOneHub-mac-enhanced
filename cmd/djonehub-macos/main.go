@@ -484,7 +484,10 @@ func serve(instance *app, listen string) {
 		log.Printf("HTTP listen failed: %v", err)
 		return
 	}
-	openPlatformUI("http://" + listen)
+	uiURL := "http://" + listen
+	ctx, platformStop := withPlatformLifecycle(ctx, uiURL)
+	defer platformStop()
+	openPlatformUI(uiURL)
 
 	serveErr := make(chan error, 1)
 	go func() {
@@ -597,6 +600,9 @@ func portScore(port string) int {
 }
 
 func discoverDJIUSBDevice() *usbDeviceStatus {
+	if runtime.GOOS != "darwin" {
+		return nil
+	}
 	out, err := exec.Command("ioreg", "-r", "-c", "IOUSBHostInterface", "-l", "-w", "0").Output()
 	if err != nil {
 		return nil
@@ -2492,6 +2498,9 @@ func (a *app) setCellularPolicy(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *app) startCellularPolicyGuard(ctx context.Context) {
+	if runtime.GOOS != "darwin" {
+		return
+	}
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 	for {

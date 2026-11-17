@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -218,6 +219,9 @@ func (m *Manager) WaitReady(timeout time.Duration) bool {
 
 // forceReleasePort 检查端口是否被占用，如果是则杀掉占用者
 func (m *Manager) forceReleasePort(portPath string) {
+	if runtime.GOOS == "windows" {
+		return
+	}
 	// 设备文件不存在时 fuser 可能返回内核线程 PID，直接跳过避免误杀。
 	if _, err := os.Stat(portPath); err != nil {
 		return
